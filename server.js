@@ -145,6 +145,10 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('ballShot', ballData);
     });
 
+    socket.on('shootUltimate', (ultimateData) => {
+        socket.broadcast.emit('ultimateShot', ultimateData);
+    });
+
     socket.on('clearBlocks', () => {
         blocks.length = 0;
         io.emit('clearBlocks');

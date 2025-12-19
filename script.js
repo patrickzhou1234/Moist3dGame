@@ -30,6 +30,17 @@ socket.on('connect_error', (error) => {
 // Third person toggle state
 let isThirdPerson = false;
 
+// Death/respawn state
+let isDead = false;
+const DEATH_HEIGHT = -15;
+const SPAWN_POSITION = new BABYLON.Vector3(0, 3, 0);
+
+// Ultimate ability state
+let isChargingUltimate = false;
+let ultimateCharge = 0;
+const ULTIMATE_CHARGE_TIME = 3000; // 3 seconds to fully charge
+const ULTIMATE_CHARGE_RATE = 100 / (ULTIMATE_CHARGE_TIME / 16.67); // % per frame at 60fps
+
 // Helper to set visibility on all child meshes of a character
 function setPlayerMeshVisibility(characterRoot, visible) {
     const children = characterRoot.getChildMeshes();
@@ -225,6 +236,11 @@ var createScene = function () {
     jumpreloading = false;
 
     scene.registerBeforeRender(function() {
+        // Check for death (fell below world)
+        if (!isDead && playerPhysicsBody.position.y < DEATH_HEIGHT) {
+            triggerDeath();
+        }
+        
         // Sync player visual mesh to physics body
         player.position.copyFrom(playerPhysicsBody.position);
         player.position.y -= 0.5; // Offset for character feet
@@ -249,8 +265,34 @@ var createScene = function () {
         var forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
         frontfacing.position = playerPhysicsBody.position.add(forward.scale(5));
         
-        // Continuous movement based on active keys
-        handleMovement();
+        // Continuous movement based on active keys (disabled when dead)
+        if (!isDead) {
+            handleMovement();
+        }
+        
+        // Ultimate charging logic
+        if (isChargingUltimate && !isDead) {
+            ultimateCharge += ULTIMATE_CHARGE_RATE;
+            document.getElementById('ultimateBar').style.width = Math.min(ultimateCharge, 100) + '%';
+            
+            // Auto-crouch while charging (same as shift)
+            var ray = new BABYLON.Ray(playerPhysicsBody.position, new BABYLON.Vector3(0, -1, 0), 1.1);
+            var hit = scene.pickWithRay(ray, function (mesh) {
+                return mesh !== playerPhysicsBody && 
+                       !mesh.name.startsWith("player") && 
+                       mesh.name !== "skybox" &&
+                       mesh.name !== "front";
+            });
+            if (hit && hit.hit) {
+                playerPhysicsBody.physicsImpostor.setLinearVelocity(playerPhysicsBody.physicsImpostor.getLinearVelocity().scale(0.9));
+                playerPhysicsBody.physicsImpostor.setAngularVelocity(playerPhysicsBody.physicsImpostor.getAngularVelocity().scale(0.9));
+            }
+            
+            // Fire when fully charged
+            if (ultimateCharge >= 100) {
+                fireUltimate();
+            }
+        }
         
         // Emit player movement using volatile (faster, won't queue)
         if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected) {
@@ -267,6 +309,95 @@ var createScene = function () {
             }
         }
     });
+    
+    // Death and respawn functions
+    function triggerDeath() {
+        isDead = true;
+        const overlay = document.getElementById('deathOverlay');
+        const timerText = document.getElementById('respawnTimer');
+        overlay.style.display = 'flex';
+        
+        let countdown = 5;
+        timerText.textContent = `Respawning in ${countdown}...`;
+        
+        const countdownInterval = setInterval(() => {
+            countdown--;
+            timerText.textContent = `Respawning in ${countdown}...`;
+            if (countdown <= 0) {
+                clearInterval(countdownInterval);
+                respawnPlayer();
+            }
+        }, 1000);
+    }
+    
+    function respawnPlayer() {
+        // Reset position and velocity
+        playerPhysicsBody.position.copyFrom(SPAWN_POSITION);
+        playerPhysicsBody.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+        playerPhysicsBody.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
+        
+        // Hide death overlay
+        document.getElementById('deathOverlay').style.display = 'none';
+        isDead = false;
+    }
+    
+    // Fire ultimate ability
+    window.fireUltimate = function() {
+        isChargingUltimate = false;
+        ultimateCharge = 0;
+        document.getElementById('ultimateContainer').style.display = 'none';
+        document.getElementById('ultimateBar').style.width = '0%';
+        
+        // Shoot super fast, 2x size projectile
+        const shootDir = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+        const startPos = playerPhysicsBody.position.add(shootDir.scale(2));
+        
+        // Create ultimate ball (placeholder - will be replaced with 3D model)
+        // TODO: Replace with loaded 3D model using BABYLON.SceneLoader.ImportMesh
+        const ultimateBall = BABYLON.MeshBuilder.CreateSphere("ultimateBall", {diameter: 0.6, segments: 16}, scene);
+        const ultimateMat = new BABYLON.StandardMaterial("ultimateMat", scene);
+        ultimateMat.diffuseColor = new BABYLON.Color3(1, 0, 0.5); // Magenta/pink
+        ultimateMat.emissiveColor = new BABYLON.Color3(0.8, 0, 0.4);
+        ultimateMat.specularColor = new BABYLON.Color3(1, 1, 1);
+        ultimateBall.material = ultimateMat;
+        ultimateBall.position = startPos.clone();
+        ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
+        
+        // Super fast impulse (3x normal speed)
+        ultimateBall.physicsImpostor.applyImpulse(shootDir.scale(45), ultimateBall.getAbsolutePosition());
+        
+        // Big recoil knockback - push player backwards hard
+        playerPhysicsBody.physicsImpostor.applyImpulse(shootDir.scale(-10), playerPhysicsBody.getAbsolutePosition());
+        
+        // Remove after 10 seconds
+        setTimeout(() => { ultimateBall.dispose(); }, 10000);
+        
+        // Emit to other players
+        socket.emit('shootUltimate', {
+            x: startPos.x, y: startPos.y, z: startPos.z,
+            dirX: shootDir.x, dirY: shootDir.y, dirZ: shootDir.z
+        });
+    };
+    
+    // Cancel ultimate if X is released early
+    window.cancelUltimate = function() {
+        if (isChargingUltimate) {
+            isChargingUltimate = false;
+            ultimateCharge = 0;
+            document.getElementById('ultimateContainer').style.display = 'none';
+            document.getElementById('ultimateBar').style.width = '0%';
+        }
+    };
+    
+    // Start charging ultimate
+    window.startChargingUltimate = function() {
+        if (!isDead && !isChargingUltimate) {
+            isChargingUltimate = true;
+            ultimateCharge = 0;
+            document.getElementById('ultimateContainer').style.display = 'block';
+        }
+    };
+    
     return scene;
 };
 
@@ -418,6 +549,28 @@ socket.on('ballShot', (ballData) => {
     }, 5000);
 });
 
+// Receive ultimate shots from other players
+socket.on('ultimateShot', (ultimateData) => {
+    // TODO: Replace with loaded 3D model
+    const ultimateBall = BABYLON.MeshBuilder.CreateSphere("ultimateBall", {diameter: 0.6, segments: 16}, scene);
+    const ultimateMat = new BABYLON.StandardMaterial("ultimateMat", scene);
+    ultimateMat.diffuseColor = new BABYLON.Color3(0.8, 0, 0.8); // Purple for other players
+    ultimateMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0.5);
+    ultimateMat.specularColor = new BABYLON.Color3(1, 1, 1);
+    ultimateBall.material = ultimateMat;
+    ultimateBall.position.set(ultimateData.x, ultimateData.y, ultimateData.z);
+    ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
+    
+    // Super fast impulse
+    const dir = new BABYLON.Vector3(ultimateData.dirX, ultimateData.dirY, ultimateData.dirZ);
+    ultimateBall.physicsImpostor.applyImpulse(dir.scale(45), ultimateBall.getAbsolutePosition());
+    
+    // Remove after 10 seconds
+    setTimeout(() => {
+        ultimateBall.dispose();
+    }, 10000);
+});
+
 // Helper function to spawn block
 function spawnBlock(data) {
     var meshmat = new BABYLON.StandardMaterial("meshmat", scene);
@@ -525,6 +678,9 @@ scene.onPointerObservable.add((pointerInfo) => {
             
             ball.physicsImpostor.applyImpulse(shootDir.scale(15), ball.getAbsolutePosition());
             
+            // Recoil knockback - push player backwards
+            playerPhysicsBody.physicsImpostor.applyImpulse(shootDir.scale(-3), playerPhysicsBody.getAbsolutePosition());
+            
             setTimeout(() => { ball.dispose(); }, 5000);
             
             socket.emit('shootBall', {
@@ -535,7 +691,7 @@ scene.onPointerObservable.add((pointerInfo) => {
             // Right click - spawn block
             playBuildAnimation();
             
-            const sizeval = size.value / 50;
+            const sizeval = 0.1 + (size.value / 100) * 2.9; // Range: 0.1 (tiny) to 3 (large)
             const spawnPos = frontfacing.getAbsolutePosition();
             const blockData = {
                 type: meshtype.value,
@@ -585,10 +741,20 @@ document.addEventListener('keydown', function(event) {
             }
         }
     }
+    
+    // Ultimate ability - hold X to charge
+    if (event.code === "KeyX") {
+        startChargingUltimate();
+    }
 });
 
 document.addEventListener('keyup', function(event) {
     keysPressed[event.code] = false;
+    
+    // Cancel ultimate if X is released before fully charged
+    if (event.code === "KeyX") {
+        cancelUltimate();
+    }
 });
 
 menureveal.onclick = function() {
