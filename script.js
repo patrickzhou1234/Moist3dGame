@@ -38,8 +38,18 @@ const SPAWN_POSITION = new BABYLON.Vector3(0, 3, 0);
 // Ultimate ability state
 let isChargingUltimate = false;
 let ultimateCharge = 0;
+let chargingBall = null; // Visual ball that grows while charging
 const ULTIMATE_CHARGE_TIME = 3000; // 3 seconds to fully charge
 const ULTIMATE_CHARGE_RATE = 100 / (ULTIMATE_CHARGE_TIME / 16.67); // % per frame at 60fps
+const ULTIMATE_MIN_SIZE = 0.1;
+const ULTIMATE_MAX_SIZE = 0.6;
+
+// Animation state for network sync
+let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging'
+
+// Network sync throttling
+let lastPositionUpdateTime = 0;
+const POSITION_UPDATE_INTERVAL = 33; // ~30 updates per second for smoother sync
 
 // Helper to set visibility on all child meshes of a character
 function setPlayerMeshVisibility(characterRoot, visible) {
@@ -238,7 +248,7 @@ var createScene = function () {
     scene.registerBeforeRender(function() {
         // Check for death (fell below world)
         if (!isDead && playerPhysicsBody.position.y < DEATH_HEIGHT) {
-            triggerDeath();
+            window.triggerDeath();
         }
         
         // Sync player visual mesh to physics body
@@ -272,8 +282,36 @@ var createScene = function () {
         
         // Ultimate charging logic
         if (isChargingUltimate && !isDead) {
+            currentAnimState = 'charging';
             ultimateCharge += ULTIMATE_CHARGE_RATE;
             document.getElementById('ultimateBar').style.width = Math.min(ultimateCharge, 100) + '%';
+            
+            // Position both arms forward while charging
+            if (player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = -1.2; // Arms forward
+                player.rightArm.rotation.x = -1.2;
+                player.leftArm.rotation.z = 0.3; // Slightly together
+                player.rightArm.rotation.z = -0.3;
+            }
+            
+            // Create or update growing ball in front of character
+            var lookDir = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+            var ballPos = playerPhysicsBody.position.add(lookDir.scale(1.5));
+            ballPos.y += 0.3; // Raise to hand height
+            
+            if (!chargingBall) {
+                // Create the charging ball
+                chargingBall = BABYLON.MeshBuilder.CreateSphere("chargingBall", {diameter: 1, segments: 16}, scene);
+                var chargeMat = new BABYLON.StandardMaterial("chargeMat", scene);
+                chargeMat.diffuseColor = new BABYLON.Color3(1, 0, 0.5);
+                chargeMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0.3);
+                chargingBall.material = chargeMat;
+            }
+            
+            // Grow the ball based on charge
+            var currentSize = ULTIMATE_MIN_SIZE + (ultimateCharge / 100) * (ULTIMATE_MAX_SIZE - ULTIMATE_MIN_SIZE);
+            chargingBall.scaling.setAll(currentSize);
+            chargingBall.position.copyFrom(ballPos);
             
             // Auto-crouch while charging (same as shift)
             var ray = new BABYLON.Ray(playerPhysicsBody.position, new BABYLON.Vector3(0, -1, 0), 1.1);
@@ -294,25 +332,46 @@ var createScene = function () {
             }
         }
         
-        // Emit player movement using volatile (faster, won't queue)
-        if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected) {
-            const pos = playerPhysicsBody.getAbsolutePosition();
-            
-            // Skip sending if position looks invalid
-            if (pos.y >= 0.3) {
-                socket.volatile.emit('playerMovement', {
-                    x: pos.x,
-                    y: pos.y,
-                    z: pos.z,
-                    rotation: player.rotation.y // Send calculated facing direction
-                });
+        // Emit player movement to other players (throttled and volatile to prevent queue buildup)
+        const now = Date.now();
+        if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected && !isDead) {
+            if (now - lastPositionUpdateTime >= POSITION_UPDATE_INTERVAL) {
+                lastPositionUpdateTime = now;
+                const pos = playerPhysicsBody.getAbsolutePosition();
+                const vel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
+                
+                // Only skip if position is extremely invalid (below death threshold)
+                if (pos.y >= DEATH_HEIGHT) {
+                    // Use volatile to drop packets if network is congested (prevents old data arriving late)
+                    socket.volatile.emit('playerMovement', {
+                        x: pos.x,
+                        y: pos.y,
+                        z: pos.z,
+                        vx: vel.x,
+                        vy: vel.y,
+                        vz: vel.z,
+                        rotation: player.rotation.y,
+                        animState: currentAnimState,
+                        chargeLevel: isChargingUltimate ? ultimateCharge : 0
+                    });
+                }
             }
         }
     });
     
-    // Death and respawn functions
-    function triggerDeath() {
+    // Death and respawn functions (exposed to window for ultimate ball kills)
+    window.triggerDeath = function() {
+        if (isDead) return; // Already dead
         isDead = true;
+        
+        // Cancel any charging ultimate
+        if (isChargingUltimate) {
+            cancelUltimate();
+        }
+        
+        // Notify other players that we died (hide our character on their screens)
+        socket.emit('playerDied');
+        
         const overlay = document.getElementById('deathOverlay');
         const timerText = document.getElementById('respawnTimer');
         overlay.style.display = 'flex';
@@ -336,6 +395,9 @@ var createScene = function () {
         playerPhysicsBody.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
         playerPhysicsBody.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
         
+        // Notify other players that we respawned (show our character on their screens)
+        socket.emit('playerRespawned');
+        
         // Hide death overlay
         document.getElementById('deathOverlay').style.display = 'none';
         isDead = false;
@@ -348,9 +410,28 @@ var createScene = function () {
         document.getElementById('ultimateContainer').style.display = 'none';
         document.getElementById('ultimateBar').style.width = '0%';
         
-        // Shoot super fast, 2x size projectile
         const shootDir = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
         const startPos = playerPhysicsBody.position.add(shootDir.scale(2));
+        
+        // Dispose the charging ball visual
+        if (chargingBall) {
+            chargingBall.dispose();
+            chargingBall = null;
+        }
+        
+        // Arm throw animation - fling arms forward then reset
+        if (player.leftArm && player.rightArm) {
+            player.leftArm.rotation.x = -1.8; // Fling forward
+            player.rightArm.rotation.x = -1.8;
+            setTimeout(() => {
+                if (player.leftArm && player.rightArm) {
+                    player.leftArm.rotation.x = 0;
+                    player.rightArm.rotation.x = 0;
+                    player.leftArm.rotation.z = Math.PI / 6;
+                    player.rightArm.rotation.z = -Math.PI / 6;
+                }
+            }, 200);
+        }
         
         // Create ultimate ball (placeholder - will be replaced with 3D model)
         // TODO: Replace with loaded 3D model using BABYLON.SceneLoader.ImportMesh
@@ -363,11 +444,11 @@ var createScene = function () {
         ultimateBall.position = startPos.clone();
         ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
         
-        // Super fast impulse (3x normal speed)
-        ultimateBall.physicsImpostor.applyImpulse(shootDir.scale(45), ultimateBall.getAbsolutePosition());
+        // ULTRA fast impulse (5x normal ball speed)
+        ultimateBall.physicsImpostor.applyImpulse(shootDir.scale(225), ultimateBall.getAbsolutePosition());
         
-        // Big recoil knockback - push player backwards hard
-        playerPhysicsBody.physicsImpostor.applyImpulse(shootDir.scale(-10), playerPhysicsBody.getAbsolutePosition());
+        // MASSIVE recoil knockback - push player backwards very hard
+        playerPhysicsBody.physicsImpostor.applyImpulse(shootDir.scale(-25), playerPhysicsBody.getAbsolutePosition());
         
         // Remove after 10 seconds
         setTimeout(() => { ultimateBall.dispose(); }, 10000);
@@ -379,13 +460,28 @@ var createScene = function () {
         });
     };
     
-    // Cancel ultimate if X is released early
+    // Cancel ultimate if X is released early or interrupted
     window.cancelUltimate = function() {
         if (isChargingUltimate) {
             isChargingUltimate = false;
             ultimateCharge = 0;
+            currentAnimState = 'idle';
             document.getElementById('ultimateContainer').style.display = 'none';
             document.getElementById('ultimateBar').style.width = '0%';
+            
+            // Dispose the charging ball
+            if (chargingBall) {
+                chargingBall.dispose();
+                chargingBall = null;
+            }
+            
+            // Reset arms to normal position
+            if (player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = 0;
+                player.rightArm.rotation.x = 0;
+                player.leftArm.rotation.z = Math.PI / 6;
+                player.rightArm.rotation.z = -Math.PI / 6;
+            }
         }
     };
     
@@ -446,6 +542,55 @@ function handleMovement() {
 
 const scene = createScene();
 
+// Velocity-based prediction and smooth interpolation for other players
+let lastFrameTime = Date.now();
+scene.registerBeforeRender(function() {
+    const now = Date.now();
+    const deltaTime = Math.min((now - lastFrameTime) / 1000, 0.1); // Cap at 100ms to prevent huge jumps
+    lastFrameTime = now;
+    
+    Object.values(otherPlayers).forEach(p => {
+        if (p.mesh && p.targetX !== undefined) {
+            // Predict where the player should be using velocity
+            // This fills in the gaps between network updates
+            p.targetX += p.velocityX * deltaTime;
+            p.targetY += p.velocityY * deltaTime;
+            p.targetZ += p.velocityZ * deltaTime;
+            
+            // Apply gravity to Y prediction (prevents floating)
+            p.velocityY -= 9.81 * deltaTime;
+            
+            // Clamp target Y to not go below ground (approximate)
+            if (p.targetY < 0) {
+                p.targetY = 0;
+                p.velocityY = 0;
+            }
+            
+            // Smoothly move mesh toward predicted target position
+            // Use faster interpolation when there's significant velocity
+            const speed = Math.sqrt(p.velocityX * p.velocityX + p.velocityZ * p.velocityZ);
+            const lerpSpeed = speed > 0.5 ? 0.4 : 0.25;
+            
+            p.mesh.position.x += (p.targetX - p.mesh.position.x) * lerpSpeed;
+            p.mesh.position.y += (p.targetY - p.mesh.position.y) * lerpSpeed;
+            p.mesh.position.z += (p.targetZ - p.mesh.position.z) * lerpSpeed;
+            
+            // Lerp rotation (handle wrap-around for smooth turning)
+            let rotDiff = p.targetRotation - p.mesh.rotation.y;
+            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+            p.mesh.rotation.y += rotDiff * 0.35;
+            
+            // Update collider to match mesh (with offset)
+            if (p.collider) {
+                p.collider.position.x = p.mesh.position.x;
+                p.collider.position.y = p.mesh.position.y + 0.5;
+                p.collider.position.z = p.mesh.position.z;
+            }
+        }
+    });
+});
+
 // Multiplayer Logic
 function addOtherPlayer(playerInfo) {
     console.log('Adding other player:', playerInfo.playerId.substring(0, 8));
@@ -460,7 +605,81 @@ function addOtherPlayer(playerInfo) {
     collider.visibility = 0;
     collider.physicsImpostor = new BABYLON.PhysicsImpostor(collider, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 0, restitution: 0.3}, scene);
     
-    otherPlayers[playerInfo.playerId] = { mesh, collider };
+    otherPlayers[playerInfo.playerId] = { 
+        mesh, 
+        collider, 
+        chargingBall: null,  // For showing their charging ultimate
+        lastAnimState: 'idle',
+        // Position and velocity for smooth interpolation
+        serverX: playerInfo.x,
+        serverY: playerInfo.y - 0.5,
+        serverZ: playerInfo.z,
+        targetX: playerInfo.x,
+        targetY: playerInfo.y - 0.5,
+        targetZ: playerInfo.z,
+        targetRotation: 0,
+        velocityX: 0,
+        velocityY: 0,
+        velocityZ: 0
+    };
+}
+
+// Apply animation to other player's character
+function applyOtherPlayerAnimation(playerData, animState, chargeLevel) {
+    const mesh = playerData.mesh;
+    if (!mesh || !mesh.leftArm || !mesh.rightArm) return;
+    
+    // Handle charging ball
+    if (animState === 'charging' && chargeLevel > 0) {
+        // Create or update charging ball
+        if (!playerData.chargingBall) {
+            playerData.chargingBall = BABYLON.MeshBuilder.CreateSphere("otherChargingBall", {diameter: 1, segments: 8}, scene);
+            const chargeMat = new BABYLON.StandardMaterial("otherChargeMat", scene);
+            chargeMat.diffuseColor = new BABYLON.Color3(1, 0, 0.5);
+            chargeMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0.3);
+            playerData.chargingBall.material = chargeMat;
+        }
+        
+        // Size based on charge
+        const currentSize = ULTIMATE_MIN_SIZE + (chargeLevel / 100) * (ULTIMATE_MAX_SIZE - ULTIMATE_MIN_SIZE);
+        playerData.chargingBall.scaling.setAll(currentSize);
+        
+        // Position in front of character
+        const forward = new BABYLON.Vector3(Math.sin(mesh.rotation.y), 0, Math.cos(mesh.rotation.y));
+        const ballPos = mesh.position.add(forward.scale(1.5));
+        ballPos.y += 0.8;
+        playerData.chargingBall.position.copyFrom(ballPos);
+        
+        // Arms forward
+        mesh.leftArm.rotation.x = -1.2;
+        mesh.rightArm.rotation.x = -1.2;
+        mesh.leftArm.rotation.z = 0.3;
+        mesh.rightArm.rotation.z = -0.3;
+    } else {
+        // Dispose charging ball if not charging
+        if (playerData.chargingBall) {
+            playerData.chargingBall.dispose();
+            playerData.chargingBall = null;
+        }
+        
+        if (animState === 'shooting') {
+            // One arm punch
+            mesh.rightArm.rotation.x = -1.2;
+            mesh.rightArm.rotation.z = 0;
+        } else if (animState === 'building') {
+            // Both arms forward
+            mesh.leftArm.rotation.x = -0.5;
+            mesh.rightArm.rotation.x = -0.5;
+        } else {
+            // Idle - reset arms
+            mesh.leftArm.rotation.x = 0;
+            mesh.rightArm.rotation.x = 0;
+            mesh.leftArm.rotation.z = Math.PI / 6;
+            mesh.rightArm.rotation.z = -Math.PI / 6;
+        }
+    }
+    
+    playerData.lastAnimState = animState;
 }
 
 socket.on('currentPlayers', (players) => {
@@ -488,22 +707,27 @@ socket.on('playerMoved', (playerInfo) => {
     }
     
     if (otherPlayers[playerInfo.playerId]) {
-        // Skip invalid positions
-        if (playerInfo.y < 0.3) return;
-        
-        // Set position directly (offset y for character feet)
         const p = otherPlayers[playerInfo.playerId];
-        p.mesh.position.x = playerInfo.x;
-        p.mesh.position.y = playerInfo.y - 0.5; // Offset for character feet
-        p.mesh.position.z = playerInfo.z;
-        p.mesh.rotation.y = playerInfo.rotation || 0;
         
-        // Update collider too (no offset, physics position)
-        if (p.collider) {
-            p.collider.position.x = playerInfo.x;
-            p.collider.position.y = playerInfo.y;
-            p.collider.position.z = playerInfo.z;
-        }
+        // Snap the internal target to the authoritative server position
+        // The mesh will smoothly interpolate toward this
+        p.serverX = playerInfo.x;
+        p.serverY = playerInfo.y - 0.5;
+        p.serverZ = playerInfo.z;
+        p.targetRotation = playerInfo.rotation || 0;
+        
+        // Store velocity for prediction between updates
+        p.velocityX = playerInfo.vx || 0;
+        p.velocityY = playerInfo.vy || 0;
+        p.velocityZ = playerInfo.vz || 0;
+        
+        // Reset prediction target to server position
+        p.targetX = p.serverX;
+        p.targetY = p.serverY;
+        p.targetZ = p.serverZ;
+        
+        // Apply animation state immediately
+        applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0);
     }
 });
 
@@ -513,7 +737,31 @@ socket.on('disconnectPlayer', (playerId) => {
         if (otherPlayers[playerId].collider) {
             otherPlayers[playerId].collider.dispose();
         }
+        if (otherPlayers[playerId].chargingBall) {
+            otherPlayers[playerId].chargingBall.dispose();
+        }
         delete otherPlayers[playerId];
+    }
+});
+
+// Hide player when they die
+socket.on('playerDied', (playerId) => {
+    if (otherPlayers[playerId]) {
+        setPlayerMeshVisibility(otherPlayers[playerId].mesh, false);
+        if (otherPlayers[playerId].collider) {
+            otherPlayers[playerId].collider.visibility = 0;
+        }
+        if (otherPlayers[playerId].chargingBall) {
+            otherPlayers[playerId].chargingBall.dispose();
+            otherPlayers[playerId].chargingBall = null;
+        }
+    }
+});
+
+// Show player when they respawn
+socket.on('playerRespawned', (playerId) => {
+    if (otherPlayers[playerId]) {
+        setPlayerMeshVisibility(otherPlayers[playerId].mesh, true);
     }
 });
 
@@ -539,6 +787,14 @@ socket.on('ballShot', (ballData) => {
     ball.position.set(ballData.x, ballData.y, ballData.z);
     ball.physicsImpostor = new BABYLON.PhysicsImpostor(ball, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 0.5, restitution: 0.5}, scene);
     
+    // Check for collision with player to cancel ultimate
+    ball.physicsImpostor.registerOnPhysicsCollide(playerPhysicsBody.physicsImpostor, () => {
+        if (isChargingUltimate) {
+            cancelUltimate();
+            console.log('Ultimate cancelled - hit by ball!');
+        }
+    });
+    
     // Apply impulse in the direction it was shot
     const dir = new BABYLON.Vector3(ballData.dirX, ballData.dirY, ballData.dirZ);
     ball.physicsImpostor.applyImpulse(dir.scale(15), ball.getAbsolutePosition());
@@ -561,13 +817,23 @@ socket.on('ultimateShot', (ultimateData) => {
     ultimateBall.position.set(ultimateData.x, ultimateData.y, ultimateData.z);
     ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
     
-    // Super fast impulse
+    // Ultimate ball is an INSTANT KILL - triggers death on collision with player
+    ultimateBall.physicsImpostor.registerOnPhysicsCollide(playerPhysicsBody.physicsImpostor, () => {
+        console.log('HIT BY ULTIMATE - INSTANT DEATH!');
+        window.triggerDeath();
+        // Dispose the ultimate ball after killing
+        ultimateBall.dispose();
+    });
+    
+    // ULTRA fast impulse (5x normal ball speed)
     const dir = new BABYLON.Vector3(ultimateData.dirX, ultimateData.dirY, ultimateData.dirZ);
-    ultimateBall.physicsImpostor.applyImpulse(dir.scale(45), ultimateBall.getAbsolutePosition());
+    ultimateBall.physicsImpostor.applyImpulse(dir.scale(225), ultimateBall.getAbsolutePosition());
     
     // Remove after 10 seconds
     setTimeout(() => {
-        ultimateBall.dispose();
+        if (ultimateBall && !ultimateBall.isDisposed()) {
+            ultimateBall.dispose();
+        }
     }, 10000);
 });
 
@@ -618,10 +884,11 @@ frontfacingvis.onchange = function() {
     }
 }
 
-// Building arm animation
+// Building arm animation (both arms)
 function playBuildAnimation() {
     if (!player.leftArm || !player.rightArm) return;
     
+    currentAnimState = 'building';
     const leftArm = player.leftArm;
     const rightArm = player.rightArm;
     const originalLeftX = leftArm.rotation.x;
@@ -643,9 +910,33 @@ function playBuildAnimation() {
             // Reset
             leftArm.rotation.x = originalLeftX;
             rightArm.rotation.x = originalRightX;
+            currentAnimState = 'idle';
             clearInterval(animInterval);
         }
     }, 30);
+}
+
+// Shooting animation (one arm - right arm)
+function playShootAnimation() {
+    if (!player.rightArm) return;
+    
+    currentAnimState = 'shooting';
+    const rightArm = player.rightArm;
+    const originalX = rightArm.rotation.x;
+    const originalZ = rightArm.rotation.z;
+    
+    // Quick punch forward
+    rightArm.rotation.x = -1.2;
+    rightArm.rotation.z = 0;
+    
+    // Return to normal after short delay
+    setTimeout(() => {
+        if (player.rightArm) {
+            player.rightArm.rotation.x = originalX;
+            player.rightArm.rotation.z = originalZ;
+            currentAnimState = 'idle';
+        }
+    }, 150);
 }
 
 // Prevent default context menu
@@ -665,6 +956,8 @@ scene.onPointerObservable.add((pointerInfo) => {
         
         if (button === 0) {
             // Left click - shoot ball
+            playShootAnimation(); // One arm punch animation
+            
             const shootDir = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
             const startPos = playerPhysicsBody.position.add(shootDir.scale(1.5));
             

@@ -123,14 +123,24 @@ io.on('connection', (socket) => {
             players[socket.id].x = movementData.x;
             players[socket.id].y = movementData.y;
             players[socket.id].z = movementData.z;
+            players[socket.id].vx = movementData.vx || 0;
+            players[socket.id].vy = movementData.vy || 0;
+            players[socket.id].vz = movementData.vz || 0;
             players[socket.id].rotation = movementData.rotation;
+            players[socket.id].animState = movementData.animState;
+            players[socket.id].chargeLevel = movementData.chargeLevel;
             
             socket.broadcast.emit('playerMoved', {
                 playerId: socket.id,
                 x: players[socket.id].x,
                 y: players[socket.id].y,
                 z: players[socket.id].z,
-                rotation: players[socket.id].rotation
+                vx: players[socket.id].vx,
+                vy: players[socket.id].vy,
+                vz: players[socket.id].vz,
+                rotation: players[socket.id].rotation,
+                animState: players[socket.id].animState,
+                chargeLevel: players[socket.id].chargeLevel
             });
         }
     });
@@ -147,6 +157,14 @@ io.on('connection', (socket) => {
 
     socket.on('shootUltimate', (ultimateData) => {
         socket.broadcast.emit('ultimateShot', ultimateData);
+    });
+
+    socket.on('playerDied', () => {
+        socket.broadcast.emit('playerDied', socket.id);
+    });
+
+    socket.on('playerRespawned', () => {
+        socket.broadcast.emit('playerRespawned', socket.id);
     });
 
     socket.on('clearBlocks', () => {
