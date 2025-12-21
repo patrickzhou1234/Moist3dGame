@@ -16,10 +16,260 @@ const spawnedBlocks = [];
 // Username state
 let myUsername = "Player";
 let hasJoined = false;
+let selectedRoomId = 'default'; // Default room selection
+let availableRooms = [];
 
 const usernameInput = document.getElementById("usernameInput");
 const startGameBtn = document.getElementById("startGameBtn");
 const usernameOverlay = document.getElementById("usernameOverlay");
+const roomSelectorOverlay = document.getElementById("roomSelectorOverlay");
+const closeRoomSelector = document.getElementById("closeRoomSelector");
+const settingsBtn = document.getElementById("settingsBtn");
+const settingsMenu = document.getElementById("settingsMenu");
+const browseRoomsBtn = document.getElementById("browseRoomsBtn");
+const toggleThirdPersonBtn = document.getElementById("toggleThirdPersonBtn");
+const joinPrivateRoomBtn = document.getElementById("joinPrivateRoomBtn");
+const privateRoomOverlay = document.getElementById("privateRoomOverlay");
+const privateRoomCodeInput = document.getElementById("privateRoomCodeInput");
+const joinPrivateRoomSubmit = document.getElementById("joinPrivateRoomSubmit");
+const closePrivateRoomOverlay = document.getElementById("closePrivateRoomOverlay");
+const currentRoomDisplay = document.getElementById("currentRoomDisplay");
+
+// Toggle settings menu
+settingsBtn.onclick = function(e) {
+    e.stopPropagation();
+    const menu = settingsMenu;
+    if (menu.style.display === 'none' || menu.style.display === '') {
+        menu.style.display = 'block';
+    } else {
+        menu.style.display = 'none';
+    }
+};
+
+// Browse rooms from settings menu
+browseRoomsBtn.onclick = function() {
+    if (!hasJoined) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Not Started',
+            text: 'Please enter your username and start the game first!',
+            confirmButtonColor: '#4a90d9'
+        });
+        return;
+    }
+    socket.emit('getRooms');
+    roomSelectorOverlay.style.display = 'block';
+    settingsMenu.style.display = 'none';
+    
+    // Update current room display
+    const currentRoom = availableRooms.find(r => r.id === selectedRoomId);
+    if (currentRoom) {
+        currentRoomDisplay.textContent = `Currently in: ${currentRoom.name}`;
+    }
+};
+
+// Join private room button
+joinPrivateRoomBtn.onclick = function() {
+    if (!hasJoined) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Not Started',
+            text: 'Please enter your username and start the game first!',
+            confirmButtonColor: '#4a90d9'
+        });
+        return;
+    }
+    privateRoomOverlay.style.display = 'flex';
+    settingsMenu.style.display = 'none';
+    privateRoomCodeInput.value = '';
+    privateRoomCodeInput.focus();
+};
+
+// Close private room overlay
+closePrivateRoomOverlay.onclick = function() {
+    privateRoomOverlay.style.display = 'none';
+};
+
+// Submit private room code
+joinPrivateRoomSubmit.onclick = function() {
+    const code = privateRoomCodeInput.value.trim().toUpperCase();
+    if (!code) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Missing Code',
+            text: 'Please enter a room code!',
+            confirmButtonColor: '#4a90d9'
+        });
+        return;
+    }
+    
+    // Request to join private room with code
+    socket.emit('joinPrivateRoom', { code: code, username: myUsername });
+};
+
+// Allow enter key to submit private room code
+privateRoomCodeInput.addEventListener("keyup", function(event) {
+    if (event.key === "Enter") {
+        joinPrivateRoomSubmit.click();
+    }
+});
+
+// Handle private room join response
+socket.on('privateRoomJoined', (data) => {
+    privateRoomOverlay.style.display = 'none';
+    selectedRoomId = data.roomId;
+    
+    // Clear other players and blocks
+    Object.values(otherPlayers).forEach(p => {
+        if (p.mesh) p.mesh.dispose();
+        if (p.collider) p.collider.dispose();
+        if (p.chargingBall) p.chargingBall.dispose();
+    });
+    Object.keys(otherPlayers).forEach(key => delete otherPlayers[key]);
+    
+    spawnedBlocks.forEach(mesh => mesh.dispose());
+    spawnedBlocks.length = 0;
+    
+    Swal.fire({
+        icon: 'success',
+        title: 'Room Joined!',
+        text: `Successfully joined: ${data.roomName}`,
+        timer: 2000,
+        showConfirmButton: false
+    });
+});
+
+socket.on('privateRoomError', (data) => {
+    Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: data.message,
+        confirmButtonColor: '#4a90d9'
+    });
+});
+
+// Toggle third person camera from settings menu
+toggleThirdPersonBtn.onclick = function() {
+    isThirdPerson = !isThirdPerson;
+    settingsMenu.style.display = 'none';
+};
+
+// Open room selector
+const openRoomSelectorBtn = document.getElementById("openRoomSelectorBtn");
+if (openRoomSelectorBtn) {
+    openRoomSelectorBtn.onclick = function() {
+        const name = usernameInput.value.trim();
+        if (!name) {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Username Required',
+                text: 'Please enter a username first!',
+                confirmButtonColor: '#4a90d9'
+            });
+            return;
+        }
+        myUsername = name;
+        socket.emit('getRooms');
+        roomSelectorOverlay.style.display = 'block';
+    };
+}
+
+// Close room selector
+closeRoomSelector.onclick = function() {
+    roomSelectorOverlay.style.display = 'none';
+};
+
+// Close settings menu when clicking outside
+document.addEventListener('click', function(event) {
+    const menu = settingsMenu;
+    const btn = settingsBtn;
+    if (menu.style.display === 'block' && !menu.contains(event.target) && event.target !== btn) {
+        menu.style.display = 'none';
+    }
+});
+
+// Receive available rooms
+socket.on('availableRooms', (rooms) => {
+    // Filter out private rooms
+    availableRooms = rooms.filter(r => r.type !== 'private');
+    renderRoomsList();
+});
+
+// Render rooms list
+function renderRoomsList() {
+    const roomsList = document.getElementById('roomsList');
+    if (availableRooms.length === 0) {
+        roomsList.innerHTML = '<div style="color:#888; text-align:center; grid-column:1/-1;">No rooms available</div>';
+        return;
+    }
+    
+    roomsList.innerHTML = availableRooms.map(room => {
+        const isFull = room.playerCount >= room.maxPlayers;
+        return `
+            <div style="background:rgba(255,255,255,0.05); border:2px solid ${room.id === selectedRoomId ? '#4a90d9' : 'rgba(255,255,255,0.1)'}; border-radius:12px; padding:20px; cursor:pointer; transition:all 0.3s;" onclick="selectRoom('${room.id}')">
+                <div style="font-size:20px; color:white; font-weight:600; margin-bottom:10px;">${room.name}</div>
+                <div style="display:flex; gap:15px; margin-bottom:15px; color:#888; font-size:14px;">
+                    <span>👥 ${room.playerCount}/${room.maxPlayers}</span>
+                    <span>${room.type === 'private' ? '🔒' : '🌐'} ${room.type}</span>
+                </div>
+                ${isFull ? 
+                    '<div style="background:rgba(229,57,53,0.2); color:#e53935; padding:8px; border-radius:6px; text-align:center; font-size:14px; font-weight:600;">FULL</div>' :
+                    '<div style="background:rgba(76,175,80,0.2); color:#4caf50; padding:8px; border-radius:6px; text-align:center; font-size:14px; font-weight:600;">JOIN</div>'
+                }
+            </div>
+        `;
+    }).join('');
+}
+
+// Select a room
+window.selectRoom = function(roomId) {
+    const room = availableRooms.find(r => r.id === roomId);
+    if (!room) return;
+    
+    if (room.playerCount >= room.maxPlayers) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Room Full',
+            text: 'This room is full!',
+            confirmButtonColor: '#4a90d9'
+        });
+        return;
+    }
+    
+    // If already in a room, leave it first
+    if (hasJoined && selectedRoomId !== roomId) {
+        socket.emit('leaveRoom', { roomId: selectedRoomId });
+        
+        // Clear other players and blocks from current room
+        Object.values(otherPlayers).forEach(p => {
+            if (p.mesh) p.mesh.dispose();
+            if (p.collider) p.collider.dispose();
+            if (p.chargingBall) p.chargingBall.dispose();
+        });
+        Object.keys(otherPlayers).forEach(key => delete otherPlayers[key]);
+        
+        spawnedBlocks.forEach(mesh => mesh.dispose());
+        spawnedBlocks.length = 0;
+    }
+    
+    selectedRoomId = roomId;
+    renderRoomsList();
+    
+    // Close room selector
+    roomSelectorOverlay.style.display = 'none';
+    
+    if (!hasJoined) {
+        usernameOverlay.style.display = 'none';
+        hasJoined = true;
+    }
+    
+    // Register player with selected room
+    socket.emit('registerPlayer', { username: myUsername, roomId: selectedRoomId });
+    
+    // Request pointer lock
+    canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock || canvas.webkitRequestPointerLock;
+    canvas.requestPointerLock();
+};
 
 startGameBtn.onclick = function() {
     const name = usernameInput.value.trim();
@@ -27,8 +277,8 @@ startGameBtn.onclick = function() {
         myUsername = name;
         usernameOverlay.style.display = "none";
         hasJoined = true;
-        // Register player now that we have a name
-        socket.emit('registerPlayer', { username: myUsername });
+        // Register player with default room
+        socket.emit('registerPlayer', { username: myUsername, roomId: selectedRoomId });
         
         // Request pointer lock
         canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock || canvas.webkitRequestPointerLock;
@@ -46,7 +296,19 @@ usernameInput.addEventListener("keyup", function(event) {
 // Register as a player when connected
 socket.on('connect', () => {
     console.log('Socket connected:', socket.id);
-    // Don't register automatically anymore, wait for username
+    // Don't register automatically anymore, wait for username and room selection
+});
+
+socket.on('joinRoomError', (data) => {
+    Swal.fire({
+        icon: 'error',
+        title: 'Cannot Join Room',
+        text: data.message,
+        confirmButtonColor: '#4a90d9'
+    });
+    // Show room selector again
+    roomSelectorOverlay.style.display = 'block';
+    hasJoined = false;
 });
 
 socket.on('disconnect', () => {

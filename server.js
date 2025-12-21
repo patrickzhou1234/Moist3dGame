@@ -22,6 +22,7 @@ const players = {};
 const blocks = [];
 const rooms = [];
 const adminSockets = new Set();
+const ADMIN_PASSWORD = "placeholder"; // Admin panel password
 
 // Create default room
 rooms.push({
@@ -30,8 +31,20 @@ rooms.push({
     maxPlayers: 16,
     type: 'public',
     players: {},
-    blocks: []
+    blocks: [],
+    code: null // No code for public rooms
 });
+
+// Helper function to generate room code
+function generateRoomCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    // Format as XXX-XXX
+    return code.substring(0, 3) + '-' + code.substring(3);
+}
 
 function getAdminData() {
     return {
@@ -42,10 +55,22 @@ function getAdminData() {
             name: room.name,
             maxPlayers: room.maxPlayers,
             type: room.type,
+            code: room.code, // Include room code for admin
             playerCount: Object.keys(room.players).length,
-            blockCount: room.blocks.length
+            blockCount: room.blocks.length,
+            players: Object.values(room.players).map(p => ({
+                id: p.id,
+                username: p.username,
+                ip: p.ip
+            }))
         })),
-        players: Object.values(players),
+        players: Object.values(players).map(p => ({
+            id: p.id,
+            username: p.username,
+            ip: p.ip,
+            roomId: p.roomId,
+            roomName: rooms.find(r => r.id === p.roomId)?.name || 'Unknown'
+        })),
         serverStartTime
     };
 }
@@ -58,43 +83,86 @@ function broadcastToAdmins(event, data) {
 
 io.on('connection', (socket) => {
     console.log('a socket connected:', socket.id);
+    
+    // Get client IP address
+    const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
 
     // Player registers as a game client
     socket.on('registerPlayer', (data) => {
         if (adminSockets.has(socket)) return; // Admins can't be players
-        if (players[socket.id]) return; // Already registered
         
-        console.log('Player registered:', socket.id);
+        const roomId = data.roomId || 'default';
+        const room = rooms.find(r => r.id === roomId);
         
-        // Create a new player object
+        if (!room) {
+            socket.emit('joinRoomError', { message: 'Room not found' });
+            return;
+        }
+        
+        if (Object.keys(room.players).length >= room.maxPlayers) {
+            socket.emit('joinRoomError', { message: 'Room is full' });
+            return;
+        }
+        
+        // If player was already in a different room, remove them
+        if (players[socket.id] && players[socket.id].roomId !== roomId) {
+            const oldRoomId = players[socket.id].roomId;
+            const oldRoom = rooms.find(r => r.id === oldRoomId);
+            if (oldRoom) {
+                delete oldRoom.players[socket.id];
+                socket.leave(oldRoomId);
+                socket.to(oldRoomId).emit('disconnectPlayer', socket.id);
+            }
+        }
+        
+        console.log('Player registered:', socket.id, 'Username:', data.username, 'Room:', room.name);
+        
+        // Create or update player object
         players[socket.id] = {
             id: socket.id,
             username: (data && data.username) ? data.username : "Player",
+            ip: clientIp,
             x: 0,
             y: 3,
             z: 0,
             rotation: 0,
             playerId: socket.id,
-            roomId: 'default'
+            roomId: roomId
         };
 
-        // Add to default room
-        const defaultRoom = rooms.find(r => r.id === 'default');
-        if (defaultRoom) {
-            defaultRoom.players[socket.id] = players[socket.id];
-        }
+        // Add to room
+        room.players[socket.id] = players[socket.id];
+        
+        // Emit the current players IN THE SAME ROOM to the new client
+        const roomPlayers = {};
+        Object.keys(room.players).forEach(id => {
+            if (players[id]) {
+                roomPlayers[id] = players[id];
+            }
+        });
+        socket.emit('currentPlayers', roomPlayers);
+        
+        // Emit existing blocks in the room to the new client
+        socket.emit('currentBlocks', room.blocks);
+        
+        // Emit available rooms to the client
+        socket.emit('availableRooms', rooms.map(r => ({
+            id: r.id,
+            name: r.name,
+            playerCount: Object.keys(r.players).length,
+            maxPlayers: r.maxPlayers,
+            type: r.type
+        })));
 
-        // Emit the current players to the new client
-        socket.emit('currentPlayers', players);
-        // Emit existing blocks to the new client
-        socket.emit('currentBlocks', blocks);
-
-        // Broadcast the new player to other clients
-        socket.broadcast.emit('newPlayer', players[socket.id]);
+        // Broadcast the new player to other clients IN THE SAME ROOM
+        socket.to(roomId).emit('newPlayer', players[socket.id]);
+        
+        // Join the room for socket.io broadcasts
+        socket.join(roomId);
 
         // Notify admins
         broadcastToAdmins('adminData', getAdminData());
-        broadcastToAdmins('adminLog', { type: 'join', message: `Player ${socket.id.substring(0, 8)} joined` });
+        broadcastToAdmins('adminLog', { type: 'join', message: `${data.username} (${socket.id.substring(0, 8)}) joined ${room.name}` });
     });
 
     socket.on('disconnect', () => {
@@ -102,17 +170,24 @@ io.on('connection', (socket) => {
         
         // Check if it was a player
         if (players[socket.id]) {
+            const playerName = players[socket.id].username;
+            const roomId = players[socket.id].roomId;
+            const room = rooms.find(r => r.id === roomId);
+            const roomName = room ? room.name : 'Unknown';
+            
             // Remove from room
             rooms.forEach(room => {
                 delete room.players[socket.id];
             });
             
             delete players[socket.id];
-            io.emit('disconnectPlayer', socket.id);
+            
+            // Only notify players in the same room
+            socket.to(roomId).emit('disconnectPlayer', socket.id);
             
             // Notify admins
             broadcastToAdmins('adminData', getAdminData());
-            broadcastToAdmins('adminLog', { type: 'leave', message: `Player ${socket.id.substring(0, 8)} left` });
+            broadcastToAdmins('adminLog', { type: 'leave', message: `${playerName} (${socket.id.substring(0, 8)}) left ${roomName}` });
         }
         
         // Remove from admin sockets if it was an admin
@@ -131,7 +206,10 @@ io.on('connection', (socket) => {
             players[socket.id].animState = movementData.animState;
             players[socket.id].chargeLevel = movementData.chargeLevel;
             
-            socket.broadcast.emit('playerMoved', {
+            const roomId = players[socket.id].roomId;
+            
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('playerMoved', {
                 playerId: socket.id,
                 x: players[socket.id].x,
                 y: players[socket.id].y,
@@ -147,21 +225,36 @@ io.on('connection', (socket) => {
     });
 
     socket.on('spawnBlock', (blockData) => {
-        blocks.push(blockData);
-        socket.broadcast.emit('blockSpawned', blockData);
-        broadcastToAdmins('adminData', getAdminData());
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            const room = rooms.find(r => r.id === roomId);
+            if (room) {
+                room.blocks.push(blockData);
+                // Only broadcast to players in the same room
+                socket.to(roomId).emit('blockSpawned', blockData);
+                broadcastToAdmins('adminData', getAdminData());
+            }
+        }
     });
 
     socket.on('shootBall', (ballData) => {
         // Add shooter ID to ball data
         ballData.shooterId = socket.id;
-        socket.broadcast.emit('ballShot', ballData);
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('ballShot', ballData);
+        }
     });
 
     socket.on('shootUltimate', (ultimateData) => {
         // Add shooter ID to ultimate data
         ultimateData.shooterId = socket.id;
-        socket.broadcast.emit('ultimateShot', ultimateData);
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('ultimateShot', ultimateData);
+        }
     });
 
     socket.on('playerDied', (data) => {
@@ -169,35 +262,140 @@ io.on('connection', (socket) => {
         const cause = data ? data.cause : 'unknown';
         const killerName = (killerId && players[killerId]) ? players[killerId].username : 'Unknown';
         
-        socket.broadcast.emit('playerDied', { 
-            playerId: socket.id,
-            killerId: killerId,
-            killerName: killerName, // Send killer name to everyone
-            cause: cause
-        });
-        
-        if (killerId && players[killerId]) {
-            // Notify the killer
-            io.to(killerId).emit('killConfirmed', {
-                victimId: socket.id,
-                victimName: players[socket.id] ? players[socket.id].username : 'Player'
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('playerDied', { 
+                playerId: socket.id,
+                killerId: killerId,
+                killerName: killerName,
+                cause: cause
             });
+            
+            if (killerId && players[killerId]) {
+                // Notify the killer
+                io.to(killerId).emit('killConfirmed', {
+                    victimId: socket.id,
+                    victimName: players[socket.id] ? players[socket.id].username : 'Player'
+                });
+            }
         }
     });
 
     socket.on('playerRespawned', () => {
-        socket.broadcast.emit('playerRespawned', socket.id);
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('playerRespawned', socket.id);
+        }
     });
 
     socket.on('clearBlocks', () => {
-        blocks.length = 0;
-        io.emit('clearBlocks');
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            const room = rooms.find(r => r.id === roomId);
+            if (room) {
+                room.blocks.length = 0;
+                // Only clear for players in the same room
+                io.to(roomId).emit('clearBlocks');
+                broadcastToAdmins('adminData', getAdminData());
+                broadcastToAdmins('adminLog', { type: 'action', message: `Blocks cleared in ${room.name} by ${players[socket.id].username}` });
+            }
+        }
+    });
+    
+    // Get available rooms
+    socket.on('getRooms', () => {
+        socket.emit('availableRooms', rooms.map(r => ({
+            id: r.id,
+            name: r.name,
+            playerCount: Object.keys(r.players).length,
+            maxPlayers: r.maxPlayers,
+            type: r.type
+        })));
+    });
+    
+    // Leave room
+    socket.on('leaveRoom', (data) => {
+        if (players[socket.id]) {
+            const roomId = data.roomId;
+            const room = rooms.find(r => r.id === roomId);
+            if (room) {
+                delete room.players[socket.id];
+                socket.leave(roomId);
+                socket.to(roomId).emit('disconnectPlayer', socket.id);
+            }
+        }
+    });
+    
+    // Join private room with code
+    socket.on('joinPrivateRoom', (data) => {
+        const code = data.code.toUpperCase();
+        const room = rooms.find(r => r.type === 'private' && r.code === code);
+        
+        if (!room) {
+            socket.emit('privateRoomError', { message: 'Invalid room code' });
+            return;
+        }
+        
+        if (Object.keys(room.players).length >= room.maxPlayers) {
+            socket.emit('privateRoomError', { message: 'Room is full' });
+            return;
+        }
+        
+        // Leave current room if in one
+        if (players[socket.id]) {
+            const oldRoomId = players[socket.id].roomId;
+            const oldRoom = rooms.find(r => r.id === oldRoomId);
+            if (oldRoom) {
+                delete oldRoom.players[socket.id];
+                socket.leave(oldRoomId);
+                socket.to(oldRoomId).emit('disconnectPlayer', socket.id);
+            }
+        }
+        
+        // Join the private room
+        players[socket.id] = {
+            id: socket.id,
+            username: data.username,
+            ip: clientIp,
+            x: 0,
+            y: 3,
+            z: 0,
+            rotation: 0,
+            playerId: socket.id,
+            roomId: room.id
+        };
+        
+        room.players[socket.id] = players[socket.id];
+        
+        // Get room players
+        const roomPlayers = {};
+        Object.keys(room.players).forEach(id => {
+            if (players[id]) {
+                roomPlayers[id] = players[id];
+            }
+        });
+        
+        socket.emit('currentPlayers', roomPlayers);
+        socket.emit('currentBlocks', room.blocks);
+        socket.to(room.id).emit('newPlayer', players[socket.id]);
+        socket.join(room.id);
+        
+        socket.emit('privateRoomJoined', { roomId: room.id, roomName: room.name });
+        
         broadcastToAdmins('adminData', getAdminData());
-        broadcastToAdmins('adminLog', { type: 'action', message: `Blocks cleared by player ${socket.id.substring(0, 8)}` });
+        broadcastToAdmins('adminLog', { type: 'join', message: `${data.username} (${socket.id.substring(0, 8)}) joined private room ${room.name}` });
     });
 
     // Admin events
-    socket.on('adminConnect', () => {
+    socket.on('adminConnect', (data) => {
+        // Verify admin password
+        if (!data || data.password !== ADMIN_PASSWORD) {
+            socket.emit('adminAuthFailed', { message: 'Invalid password' });
+            return;
+        }
+        
         adminSockets.add(socket);
         // If this socket was a player, remove them
         if (players[socket.id]) {
@@ -207,21 +405,25 @@ io.on('connection', (socket) => {
             delete players[socket.id];
             io.emit('disconnectPlayer', socket.id);
         }
+        socket.emit('adminAuthSuccess');
         socket.emit('adminData', getAdminData());
     });
 
     socket.on('adminCreateRoom', (roomData) => {
+        const roomCode = roomData.type === 'private' ? generateRoomCode() : null;
         const newRoom = {
             id: 'room_' + Date.now(),
             name: roomData.name,
             maxPlayers: roomData.maxPlayers,
             type: roomData.type,
+            code: roomCode,
             players: {},
             blocks: []
         };
         rooms.push(newRoom);
         broadcastToAdmins('adminData', getAdminData());
-        broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomData.name}" created` });
+        const codeMsg = roomCode ? ` (Code: ${roomCode})` : '';
+        broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomData.name}" created${codeMsg}` });
     });
 
     socket.on('adminDeleteRoom', (roomId) => {
@@ -256,7 +458,7 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(3000, () => {
-    console.log('🎮 Block Battle Arena server running on http://localhost:3000');
-    console.log('⚙️  Admin panel available at http://localhost:3000/admin');
+server.listen(80, () => {
+    console.log('🎮 Block Battle Arena server running on http://localhost');
+    console.log('⚙️  Admin panel available at http://localhost/admin');
 });
