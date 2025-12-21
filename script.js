@@ -12,6 +12,8 @@ const engine = new BABYLON.Engine(canvas, true);
 const socket = io();
 const otherPlayers = {};
 const spawnedBlocks = [];
+const spawnedBlocksById = {}; // Map of blockId -> block mesh for syncing
+let blockIdCounter = 0; // Local counter for generating block IDs
 
 // Username state
 let myUsername = "Player";
@@ -349,7 +351,7 @@ let isSwingingBat = false;
 let canSwingBat = true;
 const BAT_COOLDOWN = 1500; // 1.5 seconds
 const BAT_SWING_DURATION = 300; // ms - slower swing
-const BAT_KNOCKBACK_FORCE = 20; // MASSIVE knockback
+const BAT_KNOCKBACK_FORCE = 18; // MASSIVE knockback
 const BAT_RANGE = 3.0; // Extended range for long bat
 
 // Grenade state
@@ -1093,6 +1095,16 @@ var createScene = function () {
                         direction.scale(BAT_KNOCKBACK_FORCE * 2),
                         block.getAbsolutePosition()
                     );
+                    
+                    // Emit block hit to sync with other players
+                    if (block.blockId) {
+                        socket.emit('blockHit', {
+                            blockId: block.blockId,
+                            impulseX: direction.x * BAT_KNOCKBACK_FORCE * 2,
+                            impulseY: direction.y * BAT_KNOCKBACK_FORCE * 2,
+                            impulseZ: direction.z * BAT_KNOCKBACK_FORCE * 2
+                        });
+                    }
                 }
             }
         });
@@ -1798,6 +1810,15 @@ socket.on('blockSpawned', (blockData) => {
     spawnBlock(blockData);
 });
 
+socket.on('blockHit', (hitData) => {
+    // Apply the same impulse to the block on this client
+    const block = spawnedBlocksById[hitData.blockId];
+    if (block && block.physicsImpostor) {
+        const impulse = new BABYLON.Vector3(hitData.impulseX, hitData.impulseY, hitData.impulseZ);
+        block.physicsImpostor.applyImpulse(impulse, block.getAbsolutePosition());
+    }
+});
+
 socket.on('clearBlocks', () => {
     spawnedBlocks.forEach(mesh => {
         mesh.dispose();
@@ -2144,6 +2165,12 @@ function spawnBlock(data) {
     }
     mesh.position.set(data.position.x, data.position.y, data.position.z);
     
+    // Store blockId for syncing
+    if (data.blockId) {
+        mesh.blockId = data.blockId;
+        spawnedBlocksById[data.blockId] = mesh;
+    }
+    
     spawnedBlocks.push(mesh);
 }
 
@@ -2275,7 +2302,13 @@ scene.onPointerObservable.add((pointerInfo) => {
             
             const sizeval = 0.1 + (size.value / 100) * 2.9; // Range: 0.1 (tiny) to 3 (large)
             const spawnPos = frontfacing.getAbsolutePosition();
+            
+            // Generate unique block ID
+            blockIdCounter++;
+            const blockId = socket.id + '_' + blockIdCounter + '_' + Date.now();
+            
             const blockData = {
+                blockId: blockId,
                 type: meshtype.value,
                 size: sizeval,
                 position: { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z },

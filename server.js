@@ -239,6 +239,15 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Handle block hit (knockback sync)
+    socket.on('blockHit', (hitData) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Broadcast to other players in the same room
+            socket.to(roomId).emit('blockHit', hitData);
+        }
+    });
+
     socket.on('shootBall', (ballData) => {
         // Add shooter ID to ball data
         ballData.shooterId = socket.id;
