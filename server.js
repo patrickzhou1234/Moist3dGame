@@ -205,6 +205,7 @@ io.on('connection', (socket) => {
             players[socket.id].rotation = movementData.rotation;
             players[socket.id].animState = movementData.animState;
             players[socket.id].chargeLevel = movementData.chargeLevel;
+            players[socket.id].grenadeChargeLevel = movementData.grenadeChargeLevel;
             
             const roomId = players[socket.id].roomId;
             
@@ -219,7 +220,8 @@ io.on('connection', (socket) => {
                 vz: players[socket.id].vz,
                 rotation: players[socket.id].rotation,
                 animState: players[socket.id].animState,
-                chargeLevel: players[socket.id].chargeLevel
+                chargeLevel: players[socket.id].chargeLevel,
+                grenadeChargeLevel: players[socket.id].grenadeChargeLevel
             });
         }
     });
@@ -254,6 +256,50 @@ io.on('connection', (socket) => {
             const roomId = players[socket.id].roomId;
             // Only broadcast to players in the same room
             socket.to(roomId).emit('ultimateShot', ultimateData);
+        }
+    });
+
+    socket.on('batSwing', (batData) => {
+        batData.playerId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('batSwung', batData);
+        }
+    });
+
+    socket.on('shootGrenade', (grenadeData) => {
+        grenadeData.shooterId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Only broadcast to players in the same room
+            socket.to(roomId).emit('grenadeShot', grenadeData);
+        }
+    });
+
+    socket.on('grenadeExploded', (explosionData) => {
+        explosionData.shooterId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Broadcast explosion to ALL players in the room including the sender
+            io.to(roomId).emit('grenadeExplosion', explosionData);
+        }
+    });
+
+    socket.on('grappleStart', (grappleData) => {
+        grappleData.playerId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerGrappleStart', grappleData);
+        }
+    });
+
+    socket.on('grappleEnd', (grappleData) => {
+        grappleData = grappleData || {};
+        grappleData.playerId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerGrappleEnd', grappleData);
         }
     });
 

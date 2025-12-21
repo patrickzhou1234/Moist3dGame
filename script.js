@@ -124,6 +124,7 @@ socket.on('privateRoomJoined', (data) => {
         if (p.mesh) p.mesh.dispose();
         if (p.collider) p.collider.dispose();
         if (p.chargingBall) p.chargingBall.dispose();
+        if (p.grenadeChargingBall) p.grenadeChargingBall.dispose();
     });
     Object.keys(otherPlayers).forEach(key => delete otherPlayers[key]);
     
@@ -245,6 +246,7 @@ window.selectRoom = function(roomId) {
             if (p.mesh) p.mesh.dispose();
             if (p.collider) p.collider.dispose();
             if (p.chargingBall) p.chargingBall.dispose();
+            if (p.grenadeChargingBall) p.grenadeChargingBall.dispose();
         });
         Object.keys(otherPlayers).forEach(key => delete otherPlayers[key]);
         
@@ -340,8 +342,37 @@ const ULTIMATE_CHARGE_RATE = 100 / (ULTIMATE_CHARGE_TIME / 16.67); // % per fram
 const ULTIMATE_MIN_SIZE = 0.1;
 const ULTIMATE_MAX_SIZE = 0.6;
 
+// Bat swing state
+let batMesh = null;
+let isSwingingBat = false;
+let canSwingBat = true;
+const BAT_COOLDOWN = 1500; // 1.5 seconds
+const BAT_SWING_DURATION = 600; // ms - slower swing
+const BAT_KNOCKBACK_FORCE = 50;
+const BAT_RANGE = 0.5;
+
+// Grenade state
+let isChargingGrenade = false;
+let grenadeCharge = 0;
+let grenadeChargingBall = null;
+const GRENADE_CHARGE_TIME = 3000; // 3 seconds to fully charge
+const GRENADE_CHARGE_RATE = 100 / (GRENADE_CHARGE_TIME / 16.67);
+const GRENADE_MIN_SIZE = 0.2;
+const GRENADE_MAX_SIZE = 0.8;
+
+// Grappling hook state
+let isGrappling = false;
+let grappleTarget = null;
+let grappleLine = null;
+let grappleHook = null;
+let canGrapple = true;
+const GRAPPLE_COOLDOWN = 2000; // 2 seconds cooldown
+const GRAPPLE_RANGE = 50; // Max grapple distance
+const GRAPPLE_PULL_FORCE = 25; // Force applied to pull player
+const GRAPPLE_DURATION = 1500; // Max time grappling before auto-release
+
 // Animation state for network sync
-let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging'
+let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging', 'grappling'
 
 // Network sync throttling
 let lastPositionUpdateTime = 0;
@@ -550,6 +581,15 @@ var createScene = function () {
     player = createCharacterMesh(scene, "player", new BABYLON.Color3(0.2, 0.6, 1), myUsername);
     player.position.y = 3;
 
+    // Create bat (initially invisible)
+    batMesh = BABYLON.MeshBuilder.CreateCapsule("bat", {height: 2, radius: 0.15}, scene);
+    const batMat = new BABYLON.StandardMaterial("batMat", scene);
+    batMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown
+    batMat.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.025);
+    batMesh.material = batMat;
+    batMesh.visibility = 0;
+    batMesh.position.y = 3;
+
     frontfacing = BABYLON.Mesh.CreateBox("front", 1, scene);
     frontfacing.visibility = 0.5;
     var frontMat = new BABYLON.StandardMaterial("frontMat", scene);
@@ -656,6 +696,105 @@ var createScene = function () {
             }
         }
         
+        // Grenade charging
+        if (isChargingGrenade && !isDead) {
+            grenadeCharge = Math.min(grenadeCharge + GRENADE_CHARGE_RATE, 100);
+            
+            const chargePercent = grenadeCharge / 100;
+            const ballSize = GRENADE_MIN_SIZE + (GRENADE_MAX_SIZE - GRENADE_MIN_SIZE) * chargePercent;
+            
+            // Position both arms forward while charging (like ultimate)
+            if (player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = -1.2; // Arms forward
+                player.rightArm.rotation.x = -1.2;
+                player.leftArm.rotation.z = 0.3; // Slightly together
+                player.rightArm.rotation.z = -0.3;
+            }
+            
+            if (!grenadeChargingBall) {
+                grenadeChargingBall = BABYLON.MeshBuilder.CreateSphere("grenadeChargingBall", {diameter: ballSize * 2, segments: 16}, scene);
+                const chargeMat = new BABYLON.StandardMaterial("grenadeChargeMat", scene);
+                chargeMat.diffuseColor = new BABYLON.Color3(0, 1, 0);
+                chargeMat.emissiveColor = new BABYLON.Color3(0, 0.5, 0);
+                chargeMat.alpha = 0.8;
+                grenadeChargingBall.material = chargeMat;
+            }
+            
+            grenadeChargingBall.scaling.setAll(ballSize * 2 / 0.1);
+            
+            // Position ball in front of player at hand height (like ultimate)
+            var lookDir = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+            var ballPos = playerPhysicsBody.position.add(lookDir.scale(1.5));
+            ballPos.y += 0.3; // Raise to hand height
+            grenadeChargingBall.position.copyFrom(ballPos);
+            
+            const grenadeBar = document.getElementById('grenadeBar');
+            if (grenadeBar) {
+                grenadeBar.style.width = grenadeCharge + '%';
+            }
+            
+            const grenadeContainer = document.getElementById('grenadeContainer');
+            if (grenadeContainer) {
+                grenadeContainer.style.display = 'block';
+            }
+            
+            currentAnimState = 'charging';
+            
+            // Fire when fully charged
+            if (grenadeCharge >= 100) {
+                fireGrenade();
+            }
+        }
+        
+        // Grappling hook pull logic
+        if (isGrappling && grappleTarget && !isDead) {
+            currentAnimState = 'grappling';
+            
+            // Calculate direction to grapple target
+            const pullDir = grappleTarget.subtract(playerPhysicsBody.position).normalize();
+            const distanceToTarget = BABYLON.Vector3.Distance(playerPhysicsBody.position, grappleTarget);
+            
+            // Update grapple line visual
+            if (grappleLine) {
+                grappleLine.dispose();
+            }
+            grappleLine = BABYLON.MeshBuilder.CreateLines("grappleLine", {
+                points: [playerPhysicsBody.position.clone(), grappleTarget.clone()],
+                updatable: false
+            }, scene);
+            grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2); // Golden rope color
+            
+            // Update hook position
+            if (grappleHook) {
+                grappleHook.position.copyFrom(grappleTarget);
+            }
+            
+            // Apply pull force toward target
+            if (distanceToTarget > 1.5) {
+                playerPhysicsBody.physicsImpostor.applyImpulse(
+                    pullDir.scale(GRAPPLE_PULL_FORCE * 0.1), // Per-frame force
+                    playerPhysicsBody.getAbsolutePosition()
+                );
+                
+                // Cap velocity to prevent crazy speeds
+                const vel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
+                const maxSpeed = 30;
+                if (vel.length() > maxSpeed) {
+                    vel.normalize().scaleInPlace(maxSpeed);
+                    playerPhysicsBody.physicsImpostor.setLinearVelocity(vel);
+                }
+            } else {
+                // Close enough - release grapple
+                releaseGrapple();
+            }
+            
+            // Arm position - one arm extended toward grapple point
+            if (player.rightArm) {
+                player.rightArm.rotation.x = -1.5;
+                player.rightArm.rotation.z = 0;
+            }
+        }
+        
         // Emit player movement to other players (throttled and volatile to prevent queue buildup)
         const now = Date.now();
         if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected && !isDead) {
@@ -676,7 +815,8 @@ var createScene = function () {
                         vz: vel.z,
                         rotation: player.rotation.y,
                         animState: currentAnimState,
-                        chargeLevel: isChargingUltimate ? ultimateCharge : 0
+                        chargeLevel: isChargingUltimate ? ultimateCharge : 0,
+                        grenadeChargeLevel: isChargingGrenade ? grenadeCharge : 0
                     });
                 }
             }
@@ -688,9 +828,18 @@ var createScene = function () {
         if (isDead) return; // Already dead
         isDead = true;
         
-        // Cancel any charging ultimate
+        // Cancel any charging abilities
         if (isChargingUltimate) {
             cancelUltimate();
+        }
+        
+        if (isChargingGrenade) {
+            cancelGrenade();
+        }
+        
+        // Release grapple if grappling
+        if (isGrappling) {
+            releaseGrapple();
         }
         
         // Notify other players that we died (hide our character on their screens)
@@ -842,6 +991,396 @@ var createScene = function () {
         }
     };
     
+    // Swing bat
+    window.swingBat = function() {
+        if (!canSwingBat || isDead || isSwingingBat) return;
+        
+        canSwingBat = false;
+        isSwingingBat = true;
+        
+        // Show bat
+        batMesh.visibility = 1;
+        
+        // Animate swing - slower with more frames
+        let frame = 0;
+        const totalFrames = 25; // More frames for smoother, slower animation
+        const swingInterval = setInterval(() => {
+            frame++;
+            const progress = frame / totalFrames;
+            
+            // Swing from right side across to left
+            const forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+            const right = camera.getDirection(new BABYLON.Vector3(1, 0, 0));
+            const up = camera.getDirection(new BABYLON.Vector3(0, 1, 0));
+            
+            // Start from right side, swing to left
+            const swingAngle = Math.PI * 1.2 * progress; // Wider arc
+            const startAngle = -Math.PI * 0.4; // Start from right
+            const currentAngle = startAngle + swingAngle;
+            
+            // Position bat relative to camera/player position
+            const horizontalOffset = Math.cos(currentAngle) * 0.8;
+            const verticalOffset = -0.3 + Math.sin(progress * Math.PI) * 0.2; // Slight arc
+            const forwardOffset = 0.6;
+            
+            const offset = right.scale(horizontalOffset)
+                .add(forward.scale(forwardOffset))
+                .add(up.scale(verticalOffset));
+            
+            batMesh.position.copyFrom(camera.position.clone().add(offset));
+            
+            // Rotate bat to follow swing arc
+            batMesh.rotation.y = camera.rotation.y;
+            batMesh.rotation.z = currentAngle;
+            batMesh.rotation.x = Math.PI / 2.5;
+            
+            // Check for hits during swing
+            checkBatHits();
+            
+            if (frame >= totalFrames) {
+                clearInterval(swingInterval);
+                batMesh.visibility = 0;
+                isSwingingBat = false;
+            }
+        }, BAT_SWING_DURATION / totalFrames);
+        
+        // Emit to server
+        socket.emit('batSwing', {
+            x: camera.position.x,
+            y: camera.position.y,
+            z: camera.position.z,
+            dirX: forward.x,
+            dirY: forward.y,
+            dirZ: forward.z
+        });
+        
+        // Cooldown
+        setTimeout(() => {
+            canSwingBat = true;
+        }, BAT_COOLDOWN);
+    };
+    
+    // Check for bat hits
+    function checkBatHits() {
+        if (!batMesh || batMesh.visibility === 0) return;
+        
+        // Check other players
+        Object.keys(otherPlayers).forEach(playerId => {
+            const otherPlayer = otherPlayers[playerId];
+            if (otherPlayer.collider) {
+                const distance = BABYLON.Vector3.Distance(batMesh.position, otherPlayer.collider.position);
+                if (distance < BAT_RANGE) {
+                    // Apply knockback
+                    const direction = otherPlayer.collider.position.subtract(batMesh.position).normalize();
+                    if (otherPlayer.collider.physicsImpostor) {
+                        otherPlayer.collider.physicsImpostor.applyImpulse(
+                            direction.scale(BAT_KNOCKBACK_FORCE),
+                            otherPlayer.collider.getAbsolutePosition()
+                        );
+                    }
+                }
+            }
+        });
+        
+        // Check spawned blocks
+        spawnedBlocks.forEach(block => {
+            if (block.physicsImpostor) {
+                const distance = BABYLON.Vector3.Distance(batMesh.position, block.position);
+                if (distance < BAT_RANGE) {
+                    const direction = block.position.subtract(batMesh.position).normalize();
+                    block.physicsImpostor.applyImpulse(
+                        direction.scale(BAT_KNOCKBACK_FORCE * 2),
+                        block.getAbsolutePosition()
+                    );
+                }
+            }
+        });
+    }
+    
+    // Fire grenade
+    window.fireGrenade = function() {
+        if (!grenadeChargingBall || isDead) return;
+        
+        const chargePercent = grenadeCharge / 100;
+        const grenadeSize = GRENADE_MIN_SIZE + (GRENADE_MAX_SIZE - GRENADE_MIN_SIZE) * chargePercent;
+        
+        // Hide charging ball
+        grenadeChargingBall.dispose();
+        grenadeChargingBall = null;
+        isChargingGrenade = false;
+        grenadeCharge = 0;
+        
+        // Hide UI
+        const grenadeContainer = document.getElementById('grenadeContainer');
+        if (grenadeContainer) grenadeContainer.style.display = 'none';
+        
+        // Arm throw animation - fling arms forward then reset (like ultimate)
+        if (player.leftArm && player.rightArm) {
+            player.leftArm.rotation.x = -1.8; // Fling forward
+            player.rightArm.rotation.x = -1.8;
+            setTimeout(() => {
+                if (player.leftArm && player.rightArm) {
+                    player.leftArm.rotation.x = 0;
+                    player.rightArm.rotation.x = 0;
+                    player.leftArm.rotation.z = Math.PI / 6;
+                    player.rightArm.rotation.z = -Math.PI / 6;
+                }
+            }, 200);
+        }
+        
+        // Create grenade projectile
+        const grenade = BABYLON.MeshBuilder.CreateSphere("grenade", {diameter: grenadeSize * 2, segments: 16}, scene);
+        const grenadeMat = new BABYLON.StandardMaterial("grenadeMat", scene);
+        grenadeMat.diffuseColor = new BABYLON.Color3(0, 0.8, 0); // Green
+        grenadeMat.emissiveColor = new BABYLON.Color3(0, 0.4, 0);
+        grenadeMat.specularColor = new BABYLON.Color3(1, 1, 1);
+        grenade.material = grenadeMat;
+        
+        const forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+        const spawnPos = camera.position.clone().add(forward.scale(1.5));
+        grenade.position.copyFrom(spawnPos);
+        
+        grenade.physicsImpostor = new BABYLON.PhysicsImpostor(
+            grenade,
+            BABYLON.PhysicsImpostor.SphereImpostor,
+            {mass: 2 * chargePercent, restitution: 0.6},
+            scene
+        );
+        
+        // Apply impulse based on charge
+        const impulseStrength = 150 * chargePercent;
+        grenade.physicsImpostor.applyImpulse(
+            forward.scale(impulseStrength),
+            grenade.getAbsolutePosition()
+        );
+        
+        // Emit to server
+        socket.emit('shootGrenade', {
+            x: spawnPos.x,
+            y: spawnPos.y,
+            z: spawnPos.z,
+            dirX: forward.x,
+            dirY: forward.y,
+            dirZ: forward.z,
+            size: grenadeSize,
+            charge: chargePercent
+        });
+        
+        // Check for ground collision
+        grenade.physicsImpostor.registerOnPhysicsCollide([scene.getMeshByName('ground').physicsImpostor], () => {
+            // Clone position before disposal
+            const explosionPos = grenade.position.clone();
+            
+            // Emit explosion to server - server will broadcast to everyone including us
+            socket.emit('grenadeExploded', {
+                x: explosionPos.x,
+                y: explosionPos.y,
+                z: explosionPos.z,
+                size: grenadeSize
+            });
+            
+            grenade.dispose();
+        });
+        
+        // Remove after 10 seconds if it doesn't hit ground
+        setTimeout(() => {
+            if (!grenade.isDisposed()) {
+                grenade.dispose();
+            }
+        }, 10000);
+        
+        currentAnimState = 'idle';
+    };
+    
+    // Explode grenade
+    function explodeGrenade(position, size) {
+        const numFragments = 30; // More fragments for emphasis
+        const fragmentSpeed = 25;
+        
+        for (let i = 0; i < numFragments; i++) {
+            const fragment = BABYLON.MeshBuilder.CreateSphere(
+                "fragment",
+                {diameter: 0.25, segments: 8}, // Larger and smoother
+                scene
+            );
+            const fragmentMat = new BABYLON.StandardMaterial("fragmentMat", scene);
+            fragmentMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0); // Bright yellow-orange
+            fragmentMat.emissiveColor = new BABYLON.Color3(1, 0.6, 0); // Strong glow
+            fragmentMat.specularColor = new BABYLON.Color3(1, 1, 0.5);
+            fragment.material = fragmentMat;
+            fragment.position.copyFrom(position);
+            
+            fragment.physicsImpostor = new BABYLON.PhysicsImpostor(
+                fragment,
+                BABYLON.PhysicsImpostor.SphereImpostor,
+                {mass: 0.2, restitution: 0.7},
+                scene
+            );
+            
+            // Random direction
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.random() * Math.PI;
+            const direction = new BABYLON.Vector3(
+                Math.sin(phi) * Math.cos(theta),
+                Math.sin(phi) * Math.sin(theta),
+                Math.cos(phi)
+            );
+            
+            fragment.physicsImpostor.applyImpulse(
+                direction.scale(fragmentSpeed),
+                fragment.getAbsolutePosition()
+            );
+            
+            // Check collision with player
+            fragment.physicsImpostor.registerOnPhysicsCollide(
+                playerPhysicsBody.physicsImpostor,
+                () => {
+                    if (!isDead) {
+                        // Stronger damage knockback
+                        const knockbackDir = playerPhysicsBody.position.subtract(position).normalize();
+                        playerPhysicsBody.physicsImpostor.applyImpulse(
+                            knockbackDir.scale(15), // Increased from 10 to 15
+                            playerPhysicsBody.getAbsolutePosition()
+                        );
+                    }
+                }
+            );
+            
+            // Remove after 5 seconds (longer lifetime for emphasis)
+            setTimeout(() => {
+                if (!fragment.isDisposed()) {
+                    fragment.dispose();
+                }
+            }, 3000);
+        }
+    }
+    
+    // Cancel grenade
+    window.cancelGrenade = function() {
+        if (!isChargingGrenade) return;
+        
+        isChargingGrenade = false;
+        grenadeCharge = 0;
+        
+        if (grenadeChargingBall) {
+            grenadeChargingBall.dispose();
+            grenadeChargingBall = null;
+        }
+        
+        const grenadeContainer = document.getElementById('grenadeContainer');
+        if (grenadeContainer) grenadeContainer.style.display = 'none';
+        
+        // Reset arms to normal position (like ultimate cancel)
+        if (player.leftArm && player.rightArm) {
+            player.leftArm.rotation.x = 0;
+            player.rightArm.rotation.x = 0;
+            player.leftArm.rotation.z = Math.PI / 6;
+            player.rightArm.rotation.z = -Math.PI / 6;
+        }
+        
+        currentAnimState = 'idle';
+    };
+    
+    // Start charging grenade
+    window.startChargingGrenade = function() {
+        if (isDead || isChargingGrenade) return;
+        isChargingGrenade = true;
+        grenadeCharge = 0;
+        currentAnimState = 'charging';
+    };
+    
+    // Fire grappling hook
+    window.fireGrapple = function() {
+        if (!canGrapple || isDead || isGrappling) return;
+        
+        // Cast ray from camera to find grapple point
+        const ray = camera.getForwardRay(GRAPPLE_RANGE);
+        const hit = scene.pickWithRay(ray, function(mesh) {
+            return mesh !== playerPhysicsBody && 
+                   !mesh.name.startsWith("player") && 
+                   mesh.name !== "skybox" &&
+                   mesh.name !== "front" &&
+                   mesh.name !== "grappleLine" &&
+                   mesh.name !== "grappleHook";
+        });
+        
+        if (hit && hit.hit) {
+            isGrappling = true;
+            canGrapple = false;
+            grappleTarget = hit.pickedPoint.clone();
+            
+            // Create hook visual at target
+            grappleHook = BABYLON.MeshBuilder.CreateSphere("grappleHook", {diameter: 0.3, segments: 8}, scene);
+            const hookMat = new BABYLON.StandardMaterial("hookMat", scene);
+            hookMat.diffuseColor = new BABYLON.Color3(0.6, 0.4, 0.1); // Bronze/golden
+            hookMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.05);
+            grappleHook.material = hookMat;
+            grappleHook.position.copyFrom(grappleTarget);
+            
+            // Create initial line
+            grappleLine = BABYLON.MeshBuilder.CreateLines("grappleLine", {
+                points: [playerPhysicsBody.position.clone(), grappleTarget.clone()],
+                updatable: false
+            }, scene);
+            grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2);
+            
+            // Emit to other players
+            socket.emit('grappleStart', {
+                x: grappleTarget.x,
+                y: grappleTarget.y,
+                z: grappleTarget.z
+            });
+            
+            // Auto-release after duration
+            setTimeout(() => {
+                if (isGrappling) {
+                    releaseGrapple();
+                }
+            }, GRAPPLE_DURATION);
+            
+            // Play a satisfying initial pull
+            const pullDir = grappleTarget.subtract(playerPhysicsBody.position).normalize();
+            playerPhysicsBody.physicsImpostor.applyImpulse(
+                pullDir.scale(GRAPPLE_PULL_FORCE),
+                playerPhysicsBody.getAbsolutePosition()
+            );
+        }
+    };
+    
+    // Release grappling hook
+    window.releaseGrapple = function() {
+        if (!isGrappling) return;
+        
+        isGrappling = false;
+        grappleTarget = null;
+        
+        // Clean up visuals
+        if (grappleLine) {
+            grappleLine.dispose();
+            grappleLine = null;
+        }
+        if (grappleHook) {
+            grappleHook.dispose();
+            grappleHook = null;
+        }
+        
+        // Reset arm
+        if (player.rightArm) {
+            player.rightArm.rotation.x = 0;
+            player.rightArm.rotation.z = -Math.PI / 6;
+        }
+        
+        currentAnimState = 'idle';
+        
+        // Emit to other players
+        socket.emit('grappleEnd', {});
+        
+        // Cooldown before can grapple again
+        setTimeout(() => {
+            canGrapple = true;
+        }, GRAPPLE_COOLDOWN);
+    };
+    
     return scene;
 };
 
@@ -954,6 +1493,18 @@ scene.registerBeforeRender(function() {
                 p.collider.position.y = p.mesh.position.y + 0.5;
                 p.collider.position.z = p.mesh.position.z;
             }
+            
+            // Update grapple line for other players
+            if (p.isGrappling && p.grappleTarget) {
+                if (p.grappleLine) {
+                    p.grappleLine.dispose();
+                }
+                p.grappleLine = BABYLON.MeshBuilder.CreateLines("otherGrappleLine", {
+                    points: [p.mesh.position.clone(), p.grappleTarget.clone()],
+                    updatable: false
+                }, scene);
+                p.grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2);
+            }
         }
     });
 });
@@ -976,6 +1527,7 @@ function addOtherPlayer(playerInfo) {
         mesh, 
         collider, 
         chargingBall: null,  // For showing their charging ultimate
+        grenadeChargingBall: null,  // For showing their charging grenade
         lastAnimState: 'idle',
         username: playerInfo.username || "Player", // Store username here for easy access
         // Position and velocity for smooth interpolation
@@ -993,11 +1545,13 @@ function addOtherPlayer(playerInfo) {
 }
 
 // Apply animation to other player's character
-function applyOtherPlayerAnimation(playerData, animState, chargeLevel) {
+function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeChargeLevel) {
     const mesh = playerData.mesh;
     if (!mesh || !mesh.leftArm || !mesh.rightArm) return;
     
-    // Handle charging ball
+    grenadeChargeLevel = grenadeChargeLevel || 0;
+    
+    // Handle ultimate charging ball
     if (animState === 'charging' && chargeLevel > 0) {
         // Create or update charging ball
         if (!playerData.chargingBall) {
@@ -1024,12 +1578,53 @@ function applyOtherPlayerAnimation(playerData, animState, chargeLevel) {
         mesh.leftArm.rotation.z = 0.3;
         mesh.rightArm.rotation.z = -0.3;
     } else {
-        // Dispose charging ball if not charging
+        // Dispose ultimate charging ball if not charging ultimate
         if (playerData.chargingBall) {
             playerData.chargingBall.dispose();
             playerData.chargingBall = null;
         }
+    }
+    
+    // Handle grenade charging ball (separate from ultimate)
+    if (animState === 'charging' && grenadeChargeLevel > 0) {
+        // Create or update grenade charging ball
+        if (!playerData.grenadeChargingBall) {
+            playerData.grenadeChargingBall = BABYLON.MeshBuilder.CreateSphere("otherGrenadeChargingBall", {diameter: 1, segments: 8}, scene);
+            const chargeMat = new BABYLON.StandardMaterial("otherGrenadeChargeMat", scene);
+            chargeMat.diffuseColor = new BABYLON.Color3(0, 1, 0);
+            chargeMat.emissiveColor = new BABYLON.Color3(0, 0.5, 0);
+            chargeMat.alpha = 0.8;
+            playerData.grenadeChargingBall.material = chargeMat;
+        }
         
+        // Size based on charge
+        const chargePercent = grenadeChargeLevel / 100;
+        const ballSize = GRENADE_MIN_SIZE + (GRENADE_MAX_SIZE - GRENADE_MIN_SIZE) * chargePercent;
+        playerData.grenadeChargingBall.scaling.setAll(ballSize * 2 / 0.1);
+        
+        // Position in front of character
+        const forward = new BABYLON.Vector3(Math.sin(mesh.rotation.y), 0, Math.cos(mesh.rotation.y));
+        const ballPos = mesh.position.add(forward.scale(1.5));
+        ballPos.y += 0.8;
+        playerData.grenadeChargingBall.position.copyFrom(ballPos);
+        
+        // Arms forward (if not already set by ultimate)
+        if (chargeLevel <= 0) {
+            mesh.leftArm.rotation.x = -1.2;
+            mesh.rightArm.rotation.x = -1.2;
+            mesh.leftArm.rotation.z = 0.3;
+            mesh.rightArm.rotation.z = -0.3;
+        }
+    } else {
+        // Dispose grenade charging ball if not charging grenade
+        if (playerData.grenadeChargingBall) {
+            playerData.grenadeChargingBall.dispose();
+            playerData.grenadeChargingBall = null;
+        }
+    }
+    
+    // Handle other animations when not charging anything
+    if (!(animState === 'charging' && (chargeLevel > 0 || grenadeChargeLevel > 0))) {
         if (animState === 'shooting') {
             // One arm punch
             mesh.rightArm.rotation.x = -1.2;
@@ -1095,7 +1690,7 @@ socket.on('playerMoved', (playerInfo) => {
         p.targetZ = p.serverZ;
         
         // Apply animation state immediately
-        applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0);
+        applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0, playerInfo.grenadeChargeLevel || 0);
     }
 });
 
@@ -1107,6 +1702,15 @@ socket.on('disconnectPlayer', (playerId) => {
         }
         if (otherPlayers[playerId].chargingBall) {
             otherPlayers[playerId].chargingBall.dispose();
+        }
+        if (otherPlayers[playerId].grenadeChargingBall) {
+            otherPlayers[playerId].grenadeChargingBall.dispose();
+        }
+        if (otherPlayers[playerId].grappleHook) {
+            otherPlayers[playerId].grappleHook.dispose();
+        }
+        if (otherPlayers[playerId].grappleLine) {
+            otherPlayers[playerId].grappleLine.dispose();
         }
         delete otherPlayers[playerId];
     }
@@ -1143,6 +1747,19 @@ socket.on('playerDied', (data) => {
             otherPlayers[data.playerId].chargingBall.dispose();
             otherPlayers[data.playerId].chargingBall = null;
         }
+        if (otherPlayers[data.playerId].grenadeChargingBall) {
+            otherPlayers[data.playerId].grenadeChargingBall.dispose();
+            otherPlayers[data.playerId].grenadeChargingBall = null;
+        }
+        if (otherPlayers[data.playerId].grappleHook) {
+            otherPlayers[data.playerId].grappleHook.dispose();
+            otherPlayers[data.playerId].grappleHook = null;
+        }
+        if (otherPlayers[data.playerId].grappleLine) {
+            otherPlayers[data.playerId].grappleLine.dispose();
+            otherPlayers[data.playerId].grappleLine = null;
+        }
+        otherPlayers[data.playerId].isGrappling = false;
     }
     
     // Add to killfeed
@@ -1208,6 +1825,11 @@ socket.on('ballShot', (ballData) => {
             cancelUltimate();
             console.log('Ultimate cancelled - hit by ball!');
         }
+        
+        if (isChargingGrenade) {
+            cancelGrenade();
+            console.log('Grenade cancelled - hit by ball!');
+        }
     });
     
     // Remove ball after 5 seconds
@@ -1246,6 +1868,186 @@ socket.on('ultimateShot', (ultimateData) => {
             ultimateBall.dispose();
         }
     }, 10000);
+});
+
+// Receive bat swings from other players
+socket.on('batSwung', (batData) => {
+    // Visual effect for other player's bat swing (optional)
+    // Could show a quick swoosh effect at their position
+    console.log('Player swung bat at:', batData.x, batData.y, batData.z);
+    
+    // Check if we're close enough to get hit
+    if (playerPhysicsBody) {
+        const batPos = new BABYLON.Vector3(batData.x, batData.y, batData.z);
+        const distance = BABYLON.Vector3.Distance(batPos, playerPhysicsBody.position);
+        
+        if (distance < 2.5) { // Slightly larger range for network latency
+            const direction = new BABYLON.Vector3(batData.dirX, batData.dirY, batData.dirZ);
+            const knockbackDir = playerPhysicsBody.position.subtract(batPos).normalize();
+            knockbackDir.y += 0.3; // Add some upward force
+            playerPhysicsBody.physicsImpostor.applyImpulse(
+                knockbackDir.scale(BAT_KNOCKBACK_FORCE),
+                playerPhysicsBody.getAbsolutePosition()
+            );
+            
+            // Cancel charging abilities when hit
+            if (isChargingUltimate) {
+                cancelUltimate();
+                console.log('Ultimate cancelled - hit by bat!');
+            }
+            
+            if (isChargingGrenade) {
+                cancelGrenade();
+                console.log('Grenade cancelled - hit by bat!');
+            }
+        }
+    }
+});
+
+// Receive grenades from other players
+socket.on('grenadeShot', (grenadeData) => {
+    const grenade = BABYLON.MeshBuilder.CreateSphere("grenade", {diameter: grenadeData.size * 2, segments: 16}, scene);
+    const grenadeMat = new BABYLON.StandardMaterial("grenadeMat", scene);
+    grenadeMat.diffuseColor = new BABYLON.Color3(0, 0.8, 0); // Green
+    grenadeMat.emissiveColor = new BABYLON.Color3(0, 0.4, 0);
+    grenadeMat.specularColor = new BABYLON.Color3(1, 1, 1);
+    grenade.material = grenadeMat;
+    grenade.position.set(grenadeData.x, grenadeData.y, grenadeData.z);
+    
+    grenade.physicsImpostor = new BABYLON.PhysicsImpostor(
+        grenade,
+        BABYLON.PhysicsImpostor.SphereImpostor,
+        {mass: 2 * grenadeData.charge, restitution: 0.6},
+        scene
+    );
+    
+    const dir = new BABYLON.Vector3(grenadeData.dirX, grenadeData.dirY, grenadeData.dirZ);
+    const impulseStrength = 150 * grenadeData.charge;
+    grenade.physicsImpostor.applyImpulse(
+        dir.scale(impulseStrength),
+        grenade.getAbsolutePosition()
+    );
+    
+    // Check for ground collision - just dispose the grenade, explosion comes from server
+    grenade.physicsImpostor.registerOnPhysicsCollide([scene.getMeshByName('ground').physicsImpostor], () => {
+        // Dispose grenade - explosion will be triggered by grenadeExplosion event from server
+        grenade.dispose();
+    });
+    
+    setTimeout(() => {
+        if (!grenade.isDisposed()) {
+            grenade.dispose();
+        }
+    }, 10000);
+});
+
+// Explode grenade from other player
+function explodeOtherPlayerGrenade(position, size) {
+    const numFragments = 100; // More fragments for emphasis
+    const fragmentSpeed = 10;
+    
+    for (let i = 0; i < numFragments; i++) {
+        const fragment = BABYLON.MeshBuilder.CreateSphere(
+            "fragment",
+            {diameter: 1, segments: 8}, // Larger and smoother
+            scene
+        );
+        const fragmentMat = new BABYLON.StandardMaterial("fragmentMat", scene);
+        fragmentMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0); // Bright yellow-orange
+        fragmentMat.emissiveColor = new BABYLON.Color3(1, 0.6, 0); // Strong glow
+        fragmentMat.specularColor = new BABYLON.Color3(1, 1, 0.5);
+        fragment.material = fragmentMat;
+        fragment.position.copyFrom(position);
+        
+        fragment.physicsImpostor = new BABYLON.PhysicsImpostor(
+            fragment,
+            BABYLON.PhysicsImpostor.SphereImpostor,
+            {mass: 0.2, restitution: 0.7},
+            scene
+        );
+        
+        // Random direction
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI;
+        const direction = new BABYLON.Vector3(
+            Math.sin(phi) * Math.cos(theta),
+            Math.sin(phi) * Math.sin(theta),
+            Math.cos(phi)
+        );
+        
+        fragment.physicsImpostor.applyImpulse(
+            direction.scale(fragmentSpeed),
+            fragment.getAbsolutePosition()
+        );
+        
+        // Check collision with player
+        fragment.physicsImpostor.registerOnPhysicsCollide(
+            playerPhysicsBody.physicsImpostor,
+            () => {
+                if (!isDead) {
+                    // Stronger damage knockback
+                    const knockbackDir = playerPhysicsBody.position.subtract(position).normalize();
+                    playerPhysicsBody.physicsImpostor.applyImpulse(
+                        knockbackDir.scale(15), // Increased from 10 to 15
+                        playerPhysicsBody.getAbsolutePosition()
+                    );
+                }
+            }
+        );
+        
+        // Remove after 5 seconds (longer lifetime for emphasis)
+        setTimeout(() => {
+            if (!fragment.isDisposed()) {
+                fragment.dispose();
+            }
+        }, 3000);
+    }
+}
+
+// Receive grenade explosion from server (triggered by another player's grenade)
+socket.on('grenadeExplosion', (explosionData) => {
+    const position = new BABYLON.Vector3(explosionData.x, explosionData.y, explosionData.z);
+    explodeOtherPlayerGrenade(position, explosionData.size);
+});
+
+// Receive grapple start from other players
+socket.on('playerGrappleStart', (grappleData) => {
+    const playerId = grappleData.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        const targetPos = new BABYLON.Vector3(grappleData.x, grappleData.y, grappleData.z);
+        
+        // Create hook visual
+        p.grappleHook = BABYLON.MeshBuilder.CreateSphere("otherGrappleHook", {diameter: 0.3, segments: 8}, scene);
+        const hookMat = new BABYLON.StandardMaterial("otherHookMat", scene);
+        hookMat.diffuseColor = new BABYLON.Color3(0.6, 0.4, 0.1);
+        hookMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.05);
+        p.grappleHook.material = hookMat;
+        p.grappleHook.position.copyFrom(targetPos);
+        
+        // Store target for line updates
+        p.grappleTarget = targetPos;
+        p.isGrappling = true;
+    }
+});
+
+// Receive grapple end from other players
+socket.on('playerGrappleEnd', (grappleData) => {
+    const playerId = grappleData.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        if (p.grappleHook) {
+            p.grappleHook.dispose();
+            p.grappleHook = null;
+        }
+        if (p.grappleLine) {
+            p.grappleLine.dispose();
+            p.grappleLine = null;
+        }
+        p.grappleTarget = null;
+        p.isGrappling = false;
+    }
 });
 
 // Helper function to spawn block
@@ -1466,6 +2268,21 @@ document.addEventListener('keydown', function(event) {
     if (event.code === "KeyX") {
         startChargingUltimate();
     }
+    
+    // Bat swing - F key
+    if (event.code === "KeyF") {
+        window.swingBat();
+    }
+    
+    // Grenade - hold Q to charge
+    if (event.code === "KeyQ") {
+        window.startChargingGrenade();
+    }
+    
+    // Grappling hook - E key
+    if (event.code === "KeyE") {
+        window.fireGrapple();
+    }
 });
 
 document.addEventListener('keyup', function(event) {
@@ -1474,6 +2291,16 @@ document.addEventListener('keyup', function(event) {
     // Cancel ultimate if X is released before fully charged
     if (event.code === "KeyX") {
         cancelUltimate();
+    }
+    
+    // Cancel grenade if Q is released (same as ultimate)
+    if (event.code === "KeyQ") {
+        cancelGrenade();
+    }
+    
+    // Release grapple if E is released
+    if (event.code === "KeyE") {
+        window.releaseGrapple();
     }
 });
 
