@@ -295,6 +295,25 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Mine placed by player
+    socket.on('minePlaced', (mineData) => {
+        mineData.placerId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Broadcast to other players in the room
+            socket.to(roomId).emit('minePlaced', mineData);
+        }
+    });
+
+    // Mine triggered
+    socket.on('mineTriggered', (mineData) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Broadcast to all players in the room
+            io.to(roomId).emit('mineTriggered', mineData);
+        }
+    });
+
     socket.on('grappleStart', (grappleData) => {
         grappleData.playerId = socket.id;
         if (players[socket.id]) {

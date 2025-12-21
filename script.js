@@ -363,19 +363,13 @@ const GRENADE_CHARGE_RATE = 100 / (GRENADE_CHARGE_TIME / 16.67);
 const GRENADE_MIN_SIZE = 0.2;
 const GRENADE_MAX_SIZE = 0.8;
 
-// Grappling hook state
-let isGrappling = false;
-let grappleTarget = null;
-let grappleLine = null;
-let grappleHook = null;
-let canGrapple = true;
-const GRAPPLE_COOLDOWN = 2000; // 2 seconds cooldown
-const GRAPPLE_RANGE = 50; // Max grapple distance
-const GRAPPLE_PULL_FORCE = 25; // Force applied to pull player
-const GRAPPLE_DURATION = 1500; // Max time grappling before auto-release
+// Mine state
+const spawnedMines = [];
+const MINE_BOOST_FORCE = 1; // Upward boost when triggered
+const MINE_TRIGGER_RADIUS = 1.2; // How close to trigger
 
 // Animation state for network sync
-let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging', 'grappling'
+let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging'
 
 // Network sync throttling
 let lastPositionUpdateTime = 0;
@@ -644,6 +638,123 @@ var createScene = function () {
         var forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
         frontfacing.position = playerPhysicsBody.position.add(forward.scale(5));
         
+        // Check mine collisions with player
+        if (!isDead && playerPhysicsBody && playerPhysicsBody.physicsImpostor) {
+            const playerVel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
+            const playerPos = playerPhysicsBody.position;
+            
+            for (let i = spawnedMines.length - 1; i >= 0; i--) {
+                const mine = spawnedMines[i];
+                if (mine && !mine.isDisposed()) {
+                    const minePos = mine.position;
+                    
+                    // Calculate distances
+                    const dx = playerPos.x - minePos.x;
+                    const dz = playerPos.z - minePos.z;
+                    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+                    const verticalDiff = playerPos.y - minePos.y;
+                    
+                    // Log when player is near mine (for debugging)
+                    if (horizontalDist < 2.0) {
+                        console.log("Near mine:", { 
+                            horizontalDist: horizontalDist.toFixed(2), 
+                            verticalDiff: verticalDiff.toFixed(2), 
+                            playerVelY: playerVel.y.toFixed(2),
+                            isClose: horizontalDist < 1.2,
+                            isReasonableHeight: verticalDiff > -0.5 && verticalDiff < 3.0,
+                            notFastJumping: playerVel.y < 8
+                        });
+                    }
+                    
+                    // Very generous trigger conditions
+                    const isClose = horizontalDist < 1.5; // Player physics body radius is ~0.75
+                    const isReasonableHeight = verticalDiff > -0.5 && verticalDiff < 3.0;
+                    const notFastJumping = playerVel.y < 8;
+                    
+                    if (isClose && isReasonableHeight && notFastJumping) {
+                        console.log("MINE TRIGGERED!");
+                        
+                        // Trigger mine - set velocity for small upward boost
+                        const currentVel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
+                        playerPhysicsBody.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(
+                            currentVel.x,
+                            Math.max(currentVel.y, 0) + 6, // Small upward boost
+                            currentVel.z
+                        ));
+                        
+                        // Emit mine triggered event
+                        if (mine.mineId) {
+                            socket.emit('mineTriggered', { mineId: mine.mineId });
+                        }
+                        
+                        // Dispose mine
+                        if (mine.flashInterval) clearInterval(mine.flashInterval);
+                        mine.dispose();
+                        spawnedMines.splice(i, 1);
+                        
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Check mine collisions with blocks
+        for (let i = spawnedMines.length - 1; i >= 0; i--) {
+            const mine = spawnedMines[i];
+            if (mine && !mine.isDisposed()) {
+                for (const block of spawnedBlocks) {
+                    if (block && block.physicsImpostor) {
+                        const dist = BABYLON.Vector3.Distance(block.position, mine.position);
+                        if (dist < MINE_TRIGGER_RADIUS + 0.5) {
+                            console.log("MINE TRIGGERED BY BLOCK!");
+                            
+                            // Trigger mine - boost block upward with direct velocity change
+                            const currentVel = block.physicsImpostor.getLinearVelocity();
+                            block.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(
+                                currentVel.x,
+                                Math.max(currentVel.y, 0) + 8, // Upward boost for block
+                                currentVel.z
+                            ));
+                            
+                            // Emit mine triggered event
+                            if (mine.mineId) {
+                                socket.emit('mineTriggered', { mineId: mine.mineId });
+                            }
+                            
+                            // Dispose mine
+                            if (mine.flashInterval) clearInterval(mine.flashInterval);
+                            mine.dispose();
+                            spawnedMines.splice(i, 1);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check mine collisions with other players
+        Object.values(otherPlayers).forEach(p => {
+            if (p.collider) {
+                for (let i = spawnedMines.length - 1; i >= 0; i--) {
+                    const mine = spawnedMines[i];
+                    if (mine && !mine.isDisposed()) {
+                        const dist = BABYLON.Vector3.Distance(p.collider.position, mine.position);
+                        if (dist < MINE_TRIGGER_RADIUS + 0.5) {
+                            // Emit mine triggered (server will handle boost for other player)
+                            if (mine.mineId) {
+                                socket.emit('mineTriggered', { mineId: mine.mineId });
+                            }
+                            
+                            // Dispose mine locally
+                            mine.dispose();
+                            spawnedMines.splice(i, 1);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        
         // Continuous movement based on active keys (disabled when dead)
         if (!isDead) {
             handleMovement();
@@ -751,55 +862,6 @@ var createScene = function () {
             }
         }
         
-        // Grappling hook pull logic
-        if (isGrappling && grappleTarget && !isDead) {
-            currentAnimState = 'grappling';
-            
-            // Calculate direction to grapple target
-            const pullDir = grappleTarget.subtract(playerPhysicsBody.position).normalize();
-            const distanceToTarget = BABYLON.Vector3.Distance(playerPhysicsBody.position, grappleTarget);
-            
-            // Update grapple line visual
-            if (grappleLine) {
-                grappleLine.dispose();
-            }
-            grappleLine = BABYLON.MeshBuilder.CreateLines("grappleLine", {
-                points: [playerPhysicsBody.position.clone(), grappleTarget.clone()],
-                updatable: false
-            }, scene);
-            grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2); // Golden rope color
-            
-            // Update hook position
-            if (grappleHook) {
-                grappleHook.position.copyFrom(grappleTarget);
-            }
-            
-            // Apply pull force toward target
-            if (distanceToTarget > 1.5) {
-                playerPhysicsBody.physicsImpostor.applyImpulse(
-                    pullDir.scale(GRAPPLE_PULL_FORCE * 0.1), // Per-frame force
-                    playerPhysicsBody.getAbsolutePosition()
-                );
-                
-                // Cap velocity to prevent crazy speeds
-                const vel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
-                const maxSpeed = 30;
-                if (vel.length() > maxSpeed) {
-                    vel.normalize().scaleInPlace(maxSpeed);
-                    playerPhysicsBody.physicsImpostor.setLinearVelocity(vel);
-                }
-            } else {
-                // Close enough - release grapple
-                releaseGrapple();
-            }
-            
-            // Arm position - one arm extended toward grapple point
-            if (player.rightArm) {
-                player.rightArm.rotation.x = -1.5;
-                player.rightArm.rotation.z = 0;
-            }
-        }
-        
         // Emit player movement to other players (throttled and volatile to prevent queue buildup)
         const now = Date.now();
         if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected && !isDead) {
@@ -840,11 +902,6 @@ var createScene = function () {
         
         if (isChargingGrenade) {
             cancelGrenade();
-        }
-        
-        // Release grapple if grappling
-        if (isGrappling) {
-            releaseGrapple();
         }
         
         // Notify other players that we died (hide our character on their screens)
@@ -1302,98 +1359,6 @@ var createScene = function () {
         currentAnimState = 'charging';
     };
     
-    // Fire grappling hook
-    window.fireGrapple = function() {
-        if (!canGrapple || isDead || isGrappling) return;
-        
-        // Cast ray from camera to find grapple point
-        const ray = camera.getForwardRay(GRAPPLE_RANGE);
-        const hit = scene.pickWithRay(ray, function(mesh) {
-            return mesh !== playerPhysicsBody && 
-                   !mesh.name.startsWith("player") && 
-                   mesh.name !== "skybox" &&
-                   mesh.name !== "front" &&
-                   mesh.name !== "grappleLine" &&
-                   mesh.name !== "grappleHook";
-        });
-        
-        if (hit && hit.hit) {
-            isGrappling = true;
-            canGrapple = false;
-            grappleTarget = hit.pickedPoint.clone();
-            
-            // Create hook visual at target
-            grappleHook = BABYLON.MeshBuilder.CreateSphere("grappleHook", {diameter: 0.3, segments: 8}, scene);
-            const hookMat = new BABYLON.StandardMaterial("hookMat", scene);
-            hookMat.diffuseColor = new BABYLON.Color3(0.6, 0.4, 0.1); // Bronze/golden
-            hookMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.05);
-            grappleHook.material = hookMat;
-            grappleHook.position.copyFrom(grappleTarget);
-            
-            // Create initial line
-            grappleLine = BABYLON.MeshBuilder.CreateLines("grappleLine", {
-                points: [playerPhysicsBody.position.clone(), grappleTarget.clone()],
-                updatable: false
-            }, scene);
-            grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2);
-            
-            // Emit to other players
-            socket.emit('grappleStart', {
-                x: grappleTarget.x,
-                y: grappleTarget.y,
-                z: grappleTarget.z
-            });
-            
-            // Auto-release after duration
-            setTimeout(() => {
-                if (isGrappling) {
-                    releaseGrapple();
-                }
-            }, GRAPPLE_DURATION);
-            
-            // Play a satisfying initial pull
-            const pullDir = grappleTarget.subtract(playerPhysicsBody.position).normalize();
-            playerPhysicsBody.physicsImpostor.applyImpulse(
-                pullDir.scale(GRAPPLE_PULL_FORCE),
-                playerPhysicsBody.getAbsolutePosition()
-            );
-        }
-    };
-    
-    // Release grappling hook
-    window.releaseGrapple = function() {
-        if (!isGrappling) return;
-        
-        isGrappling = false;
-        grappleTarget = null;
-        
-        // Clean up visuals
-        if (grappleLine) {
-            grappleLine.dispose();
-            grappleLine = null;
-        }
-        if (grappleHook) {
-            grappleHook.dispose();
-            grappleHook = null;
-        }
-        
-        // Reset arm
-        if (player.rightArm) {
-            player.rightArm.rotation.x = 0;
-            player.rightArm.rotation.z = -Math.PI / 6;
-        }
-        
-        currentAnimState = 'idle';
-        
-        // Emit to other players
-        socket.emit('grappleEnd', {});
-        
-        // Cooldown before can grapple again
-        setTimeout(() => {
-            canGrapple = true;
-        }, GRAPPLE_COOLDOWN);
-    };
-    
     return scene;
 };
 
@@ -1505,18 +1470,6 @@ scene.registerBeforeRender(function() {
                 p.collider.position.x = p.mesh.position.x;
                 p.collider.position.y = p.mesh.position.y + 0.5;
                 p.collider.position.z = p.mesh.position.z;
-            }
-            
-            // Update grapple line for other players
-            if (p.isGrappling && p.grappleTarget) {
-                if (p.grappleLine) {
-                    p.grappleLine.dispose();
-                }
-                p.grappleLine = BABYLON.MeshBuilder.CreateLines("otherGrappleLine", {
-                    points: [p.mesh.position.clone(), p.grappleTarget.clone()],
-                    updatable: false
-                }, scene);
-                p.grappleLine.color = new BABYLON.Color3(0.8, 0.6, 0.2);
             }
         }
     });
@@ -1824,6 +1777,13 @@ socket.on('clearBlocks', () => {
         mesh.dispose();
     });
     spawnedBlocks.length = 0;
+    
+    // Also clear mines
+    spawnedMines.forEach(mine => {
+        if (mine.flashInterval) clearInterval(mine.flashInterval);
+        mine.dispose();
+    });
+    spawnedMines.length = 0;
 });
 
 // Receive balls shot by other players
@@ -2091,53 +2051,148 @@ socket.on('grenadeExplosion', (explosionData) => {
     explodeOtherPlayerGrenade(position, explosionData.size);
 });
 
-// Receive grapple start from other players
-socket.on('playerGrappleStart', (grappleData) => {
-    const playerId = grappleData.playerId;
-    if (otherPlayers[playerId]) {
-        const p = otherPlayers[playerId];
-        const targetPos = new BABYLON.Vector3(grappleData.x, grappleData.y, grappleData.z);
-        
-        // Create hook visual
-        p.grappleHook = BABYLON.MeshBuilder.CreateSphere("otherGrappleHook", {diameter: 0.3, segments: 8}, scene);
-        const hookMat = new BABYLON.StandardMaterial("otherHookMat", scene);
-        hookMat.diffuseColor = new BABYLON.Color3(0.6, 0.4, 0.1);
-        hookMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.05);
-        p.grappleHook.material = hookMat;
-        p.grappleHook.position.copyFrom(targetPos);
-        
-        // Store target for line updates
-        p.grappleTarget = targetPos;
-        p.isGrappling = true;
-    }
+// Receive mine placed by another player
+socket.on('minePlaced', (data) => {
+    // Create mine mesh
+    const mine = BABYLON.MeshBuilder.CreateCylinder("mine_" + data.mineId, {
+        height: 0.15,
+        diameter: 0.8,
+        tessellation: 16
+    }, scene);
+    
+    mine.position.set(data.x, data.y, data.z);
+    
+    // Create flashing red material
+    const mineMat = new BABYLON.StandardMaterial("mineMat_" + data.mineId, scene);
+    mineMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
+    mineMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
+    mine.material = mineMat;
+    
+    mine.enableEdgesRendering();
+    mine.edgesWidth = 3.0;
+    mine.edgesColor = new BABYLON.Color4(1, 0.3, 0.3, 1);
+    
+    mine.mineId = data.mineId;
+    
+    // Create flashing animation
+    let flashState = true;
+    mine.flashInterval = setInterval(() => {
+        if (mine.isDisposed()) {
+            clearInterval(mine.flashInterval);
+            return;
+        }
+        flashState = !flashState;
+        if (flashState) {
+            mineMat.emissiveColor = new BABYLON.Color3(0.8, 0, 0);
+            mineMat.diffuseColor = new BABYLON.Color3(1, 0.2, 0.2);
+        } else {
+            mineMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
+            mineMat.diffuseColor = new BABYLON.Color3(0.5, 0, 0);
+        }
+    }, 300);
+    
+    spawnedMines.push(mine);
 });
 
-// Receive grapple end from other players
-socket.on('playerGrappleEnd', (grappleData) => {
-    const playerId = grappleData.playerId;
-    if (otherPlayers[playerId]) {
-        const p = otherPlayers[playerId];
-        
-        if (p.grappleHook) {
-            p.grappleHook.dispose();
-            p.grappleHook = null;
+// Receive mine triggered event (remove mine and apply boost if needed)
+socket.on('mineTriggered', (data) => {
+    // Find and remove the mine
+    for (let i = spawnedMines.length - 1; i >= 0; i--) {
+        const mine = spawnedMines[i];
+        if (mine && mine.mineId === data.mineId) {
+            if (mine.flashInterval) clearInterval(mine.flashInterval);
+            mine.dispose();
+            spawnedMines.splice(i, 1);
+            break;
         }
-        if (p.grappleLine) {
-            p.grappleLine.dispose();
-            p.grappleLine = null;
-        }
-        p.grappleTarget = null;
-        p.isGrappling = false;
+    }
+    
+    // If we're the one who got boosted
+    if (data.targetPlayerId === socket.id && playerPhysicsBody && playerPhysicsBody.physicsImpostor) {
+        playerPhysicsBody.physicsImpostor.applyImpulse(
+            new BABYLON.Vector3(0, MINE_BOOST_FORCE, 0),
+            playerPhysicsBody.getAbsolutePosition()
+        );
     }
 });
 
 // Helper function to spawn block
 function spawnBlock(data) {
+    var mesh;
+    
+    // Handle mine type separately (no physics, flashing)
+    if (data.type == "mine") {
+        const mineId = data.blockId || (socket.id + '_mine_' + Date.now());
+        
+        mesh = BABYLON.MeshBuilder.CreateCylinder("mine_" + mineId, {
+            height: 0.15,
+            diameter: 0.8,
+            tessellation: 16
+        }, scene);
+        
+        mesh.position.set(data.position.x, data.position.y, data.position.z);
+        
+        // Add physics so mine drops to floor first, then becomes static
+        mesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+            mesh,
+            BABYLON.PhysicsImpostor.CylinderImpostor,
+            { mass: 0.5, restitution: 0, friction: 1000 },
+            scene
+        );
+        
+        // After 1 second, make the mine static so player can't push it
+        setTimeout(() => {
+            if (mesh && !mesh.isDisposed() && mesh.physicsImpostor) {
+                // Remove old impostor and create static one
+                const currentPos = mesh.position.clone();
+                mesh.physicsImpostor.dispose();
+                mesh.position.copyFrom(currentPos);
+                mesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+                    mesh,
+                    BABYLON.PhysicsImpostor.CylinderImpostor,
+                    { mass: 0, restitution: 0, friction: 1000 },
+                    scene
+                );
+            }
+        }, 1000);
+        
+        // Create flashing red material
+        const mineMat = new BABYLON.StandardMaterial("mineMat_" + mineId, scene);
+        mineMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
+        mineMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
+        mesh.material = mineMat;
+        
+        mesh.enableEdgesRendering();
+        mesh.edgesWidth = 3.0;
+        mesh.edgesColor = new BABYLON.Color4(1, 0.3, 0.3, 1);
+        
+        mesh.mineId = mineId;
+        
+        // Create flashing animation
+        let flashState = true;
+        mesh.flashInterval = setInterval(() => {
+            if (mesh.isDisposed()) {
+                clearInterval(mesh.flashInterval);
+                return;
+            }
+            flashState = !flashState;
+            if (flashState) {
+                mineMat.emissiveColor = new BABYLON.Color3(0.8, 0, 0);
+                mineMat.diffuseColor = new BABYLON.Color3(1, 0.2, 0.2);
+            } else {
+                mineMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
+                mineMat.diffuseColor = new BABYLON.Color3(0.5, 0, 0);
+            }
+        }, 300);
+        
+        spawnedMines.push(mesh);
+        return; // Don't add to spawnedBlocks
+    }
+    
     var meshmat = new BABYLON.StandardMaterial("meshmat", scene);
     meshmat.diffuseColor = new BABYLON.Color3.FromHexString(data.color);
     meshmat.backFaceCulling = false;
 
-    var mesh;
     var frictionVal = data.slimy ? 300 : 0.5;
     
     if (data.type == "box") {
@@ -2371,11 +2426,6 @@ document.addEventListener('keydown', function(event) {
     if (event.code === "KeyQ") {
         window.startChargingGrenade();
     }
-    
-    // Grappling hook - E key
-    if (event.code === "KeyE") {
-        window.fireGrapple();
-    }
 });
 
 document.addEventListener('keyup', function(event) {
@@ -2389,11 +2439,6 @@ document.addEventListener('keyup', function(event) {
     // Cancel grenade if Q is released (same as ultimate)
     if (event.code === "KeyQ") {
         cancelGrenade();
-    }
-    
-    // Release grapple if E is released
-    if (event.code === "KeyE") {
-        window.releaseGrapple();
     }
 });
 
