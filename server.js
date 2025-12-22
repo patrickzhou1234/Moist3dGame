@@ -206,6 +206,11 @@ io.on('connection', (socket) => {
             players[socket.id].animState = movementData.animState;
             players[socket.id].chargeLevel = movementData.chargeLevel;
             players[socket.id].grenadeChargeLevel = movementData.grenadeChargeLevel;
+            players[socket.id].droneChargeLevel = movementData.droneChargeLevel;
+            players[socket.id].isDroneMode = movementData.isDroneMode;
+            players[socket.id].droneX = movementData.droneX;
+            players[socket.id].droneY = movementData.droneY;
+            players[socket.id].droneZ = movementData.droneZ;
             
             const roomId = players[socket.id].roomId;
             
@@ -221,7 +226,12 @@ io.on('connection', (socket) => {
                 rotation: players[socket.id].rotation,
                 animState: players[socket.id].animState,
                 chargeLevel: players[socket.id].chargeLevel,
-                grenadeChargeLevel: players[socket.id].grenadeChargeLevel
+                grenadeChargeLevel: players[socket.id].grenadeChargeLevel,
+                droneChargeLevel: players[socket.id].droneChargeLevel,
+                isDroneMode: players[socket.id].isDroneMode,
+                droneX: players[socket.id].droneX,
+                droneY: players[socket.id].droneY,
+                droneZ: players[socket.id].droneZ
             });
         }
     });
@@ -292,6 +302,34 @@ io.on('connection', (socket) => {
             const roomId = players[socket.id].roomId;
             // Broadcast explosion to ALL players in the room including the sender
             io.to(roomId).emit('grenadeExplosion', explosionData);
+        }
+    });
+
+    // Drone bomb exploded (lighter effect than grenade)
+    socket.on('droneBombExploded', (explosionData) => {
+        explosionData.shooterId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Broadcast to other players only (not the sender - they already see it)
+            socket.to(roomId).emit('droneBombExplosion', explosionData);
+        }
+    });
+
+    // Drone bomb dropped (so others can see the falling bomb)
+    socket.on('droneBombDropped', (bombData) => {
+        bombData.shooterId = socket.id;
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('droneBombDropped', bombData);
+        }
+    });
+
+    // Drone was hit by a projectile
+    socket.on('droneHit', (hitData) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            // Notify the drone owner that their drone was hit
+            io.to(hitData.droneOwnerId).emit('yourDroneHit', hitData);
         }
     });
 

@@ -368,6 +368,20 @@ const spawnedMines = [];
 const MINE_BOOST_FORCE = 1; // Upward boost when triggered
 const MINE_TRIGGER_RADIUS = 1.2; // How close to trigger
 
+// Drone state
+let isChargingDrone = false;
+let droneCharge = 0;
+let droneChargingBall = null;
+let isDroneMode = false;
+let droneMesh = null;
+let droneCamera = null;
+let droneHealth = 2; // Drone dies after 2 hits
+const DRONE_CHARGE_TIME = 2500; // 2.5 seconds to fully charge
+const DRONE_CHARGE_RATE = 100 / (DRONE_CHARGE_TIME / 16.67);
+const DRONE_SPEED = 0.3; // Movement speed
+const DRONE_BOMB_COOLDOWN = 1000; // 1 second between bombs
+let canDropBomb = true;
+
 // Animation state for network sync
 let currentAnimState = 'idle'; // 'idle', 'shooting', 'building', 'charging'
 
@@ -755,8 +769,8 @@ var createScene = function () {
             }
         });
         
-        // Continuous movement based on active keys (disabled when dead)
-        if (!isDead) {
+        // Continuous movement based on active keys (disabled when dead or in drone mode)
+        if (!isDead && !isDroneMode) {
             handleMovement();
         }
         
@@ -862,6 +876,121 @@ var createScene = function () {
             }
         }
         
+        // Drone charging
+        if (isChargingDrone && !isDead && !isDroneMode) {
+            droneCharge = Math.min(droneCharge + DRONE_CHARGE_RATE, 100);
+            
+            // Position both arms up while charging
+            if (player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = -1.5;
+                player.rightArm.rotation.x = -1.5;
+                player.leftArm.rotation.z = 0.5;
+                player.rightArm.rotation.z = -0.5;
+            }
+            
+            // Create or update charging visual
+            if (!droneChargingBall) {
+                droneChargingBall = BABYLON.MeshBuilder.CreateBox("droneChargingBall", {size: 0.3}, scene);
+                const chargeMat = new BABYLON.StandardMaterial("droneChargeMat", scene);
+                chargeMat.diffuseColor = new BABYLON.Color3(0, 1, 1);
+                chargeMat.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
+                droneChargingBall.material = chargeMat;
+            }
+            
+            const chargePercent = droneCharge / 100;
+            droneChargingBall.scaling.setAll(0.3 + chargePercent * 0.5);
+            
+            // Position above player
+            droneChargingBall.position.x = playerPhysicsBody.position.x;
+            droneChargingBall.position.y = playerPhysicsBody.position.y + 2 + chargePercent;
+            droneChargingBall.position.z = playerPhysicsBody.position.z;
+            droneChargingBall.rotation.y += 0.1; // Spin effect
+            
+            const droneBar = document.getElementById('droneBar');
+            if (droneBar) {
+                droneBar.style.width = droneCharge + '%';
+            }
+            
+            document.getElementById('droneContainer').style.display = 'block';
+            
+            currentAnimState = 'charging';
+            
+            // Launch drone when fully charged
+            if (droneCharge >= 100) {
+                launchDrone();
+            }
+        }
+        
+        // Drone mode controls
+        if (isDroneMode && droneMesh && droneCamera) {
+            // Drone movement with WASD
+            const droneForward = droneCamera.getDirection(new BABYLON.Vector3(0, 0, 1));
+            const droneRight = droneCamera.getDirection(new BABYLON.Vector3(1, 0, 0));
+            droneForward.y = 0;
+            droneForward.normalize();
+            droneRight.y = 0;
+            droneRight.normalize();
+            
+            let droneMove = new BABYLON.Vector3(0, 0, 0);
+            
+            if (keysPressed['KeyW'] || keysPressed['ArrowUp']) {
+                droneMove.addInPlace(droneForward.scale(DRONE_SPEED));
+            }
+            if (keysPressed['KeyS'] || keysPressed['ArrowDown']) {
+                droneMove.subtractInPlace(droneForward.scale(DRONE_SPEED));
+            }
+            if (keysPressed['KeyA'] || keysPressed['ArrowLeft']) {
+                droneMove.subtractInPlace(droneRight.scale(DRONE_SPEED));
+            }
+            if (keysPressed['KeyD'] || keysPressed['ArrowRight']) {
+                droneMove.addInPlace(droneRight.scale(DRONE_SPEED));
+            }
+            if (keysPressed['Space']) {
+                droneMove.y += DRONE_SPEED; // Go up
+            }
+            if (keysPressed['ShiftLeft'] || keysPressed['ShiftRight']) {
+                droneMove.y -= DRONE_SPEED; // Go down
+            }
+            
+            droneMesh.position.addInPlace(droneMove);
+            
+            // Check for collision with any object (except skybox)
+            const droneRayDirs = [
+                new BABYLON.Vector3(1, 0, 0),
+                new BABYLON.Vector3(-1, 0, 0),
+                new BABYLON.Vector3(0, 0, 1),
+                new BABYLON.Vector3(0, 0, -1),
+                new BABYLON.Vector3(0, -1, 0)
+            ];
+            
+            for (let dir of droneRayDirs) {
+                const ray = new BABYLON.Ray(droneMesh.position, dir, 0.5);
+                const hit = scene.pickWithRay(ray, function(mesh) {
+                    return mesh !== droneMesh && 
+                           !mesh.name.startsWith("drone") &&
+                           !mesh.name.startsWith("prop") &&
+                           mesh.name !== "skybox" &&
+                           mesh.name !== "front" &&
+                           mesh !== playerPhysicsBody;
+                });
+                
+                if (hit && hit.hit) {
+                    // Drone crashed - exit drone mode
+                    window.exitDrone();
+                    return;
+                }
+            }
+            
+            // Keep drone above ground
+            if (droneMesh.position.y < 2) {
+                droneMesh.position.y = 2;
+            }
+            
+            // Update drone camera position
+            droneCamera.position.copyFrom(droneMesh.position);
+            droneCamera.position.y += 0.5;
+        }
+        
         // Emit player movement to other players (throttled and volatile to prevent queue buildup)
         const now = Date.now();
         if (playerPhysicsBody && playerPhysicsBody.physicsImpostor && socket.connected && !isDead) {
@@ -883,7 +1012,12 @@ var createScene = function () {
                         rotation: player.rotation.y,
                         animState: currentAnimState,
                         chargeLevel: isChargingUltimate ? ultimateCharge : 0,
-                        grenadeChargeLevel: isChargingGrenade ? grenadeCharge : 0
+                        grenadeChargeLevel: isChargingGrenade ? grenadeCharge : 0,
+                        droneChargeLevel: isChargingDrone ? droneCharge : 0,
+                        isDroneMode: isDroneMode,
+                        droneX: droneMesh ? droneMesh.position.x : 0,
+                        droneY: droneMesh ? droneMesh.position.y : 0,
+                        droneZ: droneMesh ? droneMesh.position.z : 0
                     });
                 }
             }
@@ -902,6 +1036,15 @@ var createScene = function () {
         
         if (isChargingGrenade) {
             cancelGrenade();
+        }
+        
+        if (isChargingDrone) {
+            window.cancelDrone();
+        }
+        
+        // Exit drone mode if in it
+        if (isDroneMode) {
+            window.exitDrone();
         }
         
         // Notify other players that we died (hide our character on their screens)
@@ -1353,11 +1496,296 @@ var createScene = function () {
     
     // Start charging grenade
     window.startChargingGrenade = function() {
-        if (isDead || isChargingGrenade) return;
+        if (isDead || isChargingGrenade || isDroneMode) return;
         isChargingGrenade = true;
         grenadeCharge = 0;
         currentAnimState = 'charging';
     };
+    
+    // Start charging drone
+    window.startChargingDrone = function() {
+        if (isDead || isChargingDrone || isDroneMode) return;
+        isChargingDrone = true;
+        droneCharge = 0;
+        currentAnimState = 'charging';
+    };
+    
+    // Cancel drone charging
+    window.cancelDrone = function() {
+        if (isChargingDrone) {
+            isChargingDrone = false;
+            droneCharge = 0;
+            currentAnimState = 'idle';
+            document.getElementById('droneContainer').style.display = 'none';
+            document.getElementById('droneBar').style.width = '0%';
+            
+            if (droneChargingBall) {
+                droneChargingBall.dispose();
+                droneChargingBall = null;
+            }
+            
+            // Reset arms
+            if (player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = 0;
+                player.rightArm.rotation.x = 0;
+                player.leftArm.rotation.z = Math.PI / 6;
+                player.rightArm.rotation.z = -Math.PI / 6;
+            }
+        }
+    };
+    
+    // Launch drone after charging
+    window.launchDrone = function() {
+        isChargingDrone = false;
+        droneCharge = 0;
+        droneHealth = 2; // Reset drone health
+        document.getElementById('droneContainer').style.display = 'none';
+        document.getElementById('droneBar').style.width = '0%';
+        
+        // Dispose charging ball
+        if (droneChargingBall) {
+            droneChargingBall.dispose();
+            droneChargingBall = null;
+        }
+        
+        // Create drone mesh
+        droneMesh = BABYLON.MeshBuilder.CreateBox("drone", {width: 0.8, height: 0.3, depth: 0.8}, scene);
+        const droneMat = new BABYLON.StandardMaterial("droneMat", scene);
+        droneMat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+        droneMat.emissiveColor = new BABYLON.Color3(0, 0.3, 0.3);
+        droneMesh.material = droneMat;
+        
+        // Add physics collider for the drone so it can be hit
+        droneMesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+            droneMesh,
+            BABYLON.PhysicsImpostor.BoxImpostor,
+            {mass: 0, restitution: 0.3},
+            scene
+        );
+        
+        // Add propeller visuals (small)
+        const prop1 = BABYLON.MeshBuilder.CreateCylinder("prop1", {height: 0.02, diameter: 0.15}, scene);
+        prop1.parent = droneMesh;
+        prop1.position.set(0.25, 0.15, 0.25);
+        prop1.material = droneMat;
+        
+        const prop2 = BABYLON.MeshBuilder.CreateCylinder("prop2", {height: 0.02, diameter: 0.15}, scene);
+        prop2.parent = droneMesh;
+        prop2.position.set(-0.25, 0.15, 0.25);
+        prop2.material = droneMat;
+        
+        const prop3 = BABYLON.MeshBuilder.CreateCylinder("prop3", {height: 0.02, diameter: 0.15}, scene);
+        prop3.parent = droneMesh;
+        prop3.position.set(0.25, 0.15, -0.25);
+        prop3.material = droneMat;
+        
+        const prop4 = BABYLON.MeshBuilder.CreateCylinder("prop4", {height: 0.02, diameter: 0.15}, scene);
+        prop4.parent = droneMesh;
+        prop4.position.set(-0.25, 0.15, -0.25);
+        prop4.material = droneMat;
+        
+        // Position drone above player
+        droneMesh.position.x = playerPhysicsBody.position.x;
+        droneMesh.position.y = playerPhysicsBody.position.y + 5;
+        droneMesh.position.z = playerPhysicsBody.position.z;
+        
+        // Create drone camera
+        droneCamera = new BABYLON.FreeCamera("droneCamera", droneMesh.position.clone(), scene);
+        droneCamera.position.y += 0.5;
+        droneCamera.attachControl(canvas, true);
+        droneCamera.inertia = 0.5;
+        droneCamera.angularSensibility = 500;
+        
+        // Cool camera transition - start from player camera position
+        const startPos = camera.position.clone();
+        const endPos = droneCamera.position.clone();
+        let transitionProgress = 0;
+        
+        // Create transition camera
+        const transitionCamera = new BABYLON.FreeCamera("transitionCam", startPos, scene);
+        transitionCamera.rotation = camera.rotation.clone();
+        scene.activeCamera = transitionCamera;
+        
+        const transitionInterval = setInterval(() => {
+            transitionProgress += 0.05;
+            if (transitionProgress >= 1) {
+                clearInterval(transitionInterval);
+                transitionCamera.dispose();
+                scene.activeCamera = droneCamera;
+                droneCamera.rotation = new BABYLON.Vector3(0.5, 0, 0); // Look slightly down
+            } else {
+                // Smooth interpolation
+                const t = transitionProgress * transitionProgress * (3 - 2 * transitionProgress); // Smoothstep
+                transitionCamera.position = BABYLON.Vector3.Lerp(startPos, endPos, t);
+            }
+        }, 16);
+        
+        isDroneMode = true;
+        document.getElementById('droneModeIndicator').style.display = 'block';
+        
+        // Reset arms
+        if (player.leftArm && player.rightArm) {
+            player.leftArm.rotation.x = 0;
+            player.rightArm.rotation.x = 0;
+            player.leftArm.rotation.z = Math.PI / 6;
+            player.rightArm.rotation.z = -Math.PI / 6;
+        }
+        
+        currentAnimState = 'idle';
+    };
+    
+    // Exit drone mode
+    window.exitDrone = function() {
+        if (!isDroneMode) return;
+        
+        isDroneMode = false;
+        document.getElementById('droneModeIndicator').style.display = 'none';
+        
+        // Cool camera transition back to player
+        if (droneCamera && droneMesh) {
+            const startPos = droneCamera.position.clone();
+            const endPos = playerPhysicsBody.position.clone();
+            endPos.y += 1; // Eye height
+            let transitionProgress = 0;
+            
+            // Create transition camera
+            const transitionCamera = new BABYLON.FreeCamera("transitionCamBack", startPos, scene);
+            transitionCamera.rotation = droneCamera.rotation.clone();
+            scene.activeCamera = transitionCamera;
+            
+            const transitionInterval = setInterval(() => {
+                transitionProgress += 0.08;
+                if (transitionProgress >= 1) {
+                    clearInterval(transitionInterval);
+                    transitionCamera.dispose();
+                    scene.activeCamera = camera;
+                    camera.attachControl(canvas, true);
+                } else {
+                    // Smooth interpolation
+                    const t = transitionProgress * transitionProgress * (3 - 2 * transitionProgress);
+                    transitionCamera.position = BABYLON.Vector3.Lerp(startPos, endPos, t);
+                }
+            }, 16);
+        } else {
+            scene.activeCamera = camera;
+            camera.attachControl(canvas, true);
+        }
+        
+        // Dispose drone
+        if (droneMesh) {
+            droneMesh.dispose();
+            droneMesh = null;
+        }
+        
+        // Dispose drone camera
+        if (droneCamera) {
+            droneCamera.detachControl(canvas);
+            droneCamera.dispose();
+            droneCamera = null;
+        }
+    };
+    
+    // Drop bomb from drone
+    window.dropDroneBomb = function() {
+        if (!isDroneMode || !droneMesh || !canDropBomb) return;
+        
+        canDropBomb = false;
+        
+        // Create bomb (grenade-like)
+        const bomb = BABYLON.MeshBuilder.CreateSphere("droneBomb", {diameter: 0.4, segments: 16}, scene);
+        const bombMat = new BABYLON.StandardMaterial("bombMat", scene);
+        bombMat.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+        bombMat.emissiveColor = new BABYLON.Color3(0.3, 0, 0);
+        bomb.material = bombMat;
+        
+        // Drop from drone position
+        bomb.position.copyFrom(droneMesh.position);
+        bomb.position.y -= 0.5;
+        
+        // Emit bomb drop to other players
+        socket.emit('droneBombDropped', {
+            x: bomb.position.x,
+            y: bomb.position.y,
+            z: bomb.position.z
+        });
+        
+        // Add physics - just falls down
+        bomb.physicsImpostor = new BABYLON.PhysicsImpostor(
+            bomb,
+            BABYLON.PhysicsImpostor.SphereImpostor,
+            {mass: 1, restitution: 0.3},
+            scene
+        );
+        
+        // Explode on ground collision
+        bomb.physicsImpostor.registerOnPhysicsCollide([scene.getMeshByName('ground').physicsImpostor], () => {
+            explodeDroneBomb(bomb.position.clone());
+            bomb.dispose();
+        });
+        
+        // Also explode after timeout
+        setTimeout(() => {
+            if (!bomb.isDisposed()) {
+                explodeDroneBomb(bomb.position.clone());
+                bomb.dispose();
+            }
+        }, 5000);
+        
+        // Cooldown
+        setTimeout(() => {
+            canDropBomb = true;
+        }, DRONE_BOMB_COOLDOWN);
+    };
+    
+    // Explode drone bomb (simple flash - no particles)
+    function explodeDroneBomb(position) {
+        // Simple flash sphere that expands and fades
+        const flash = BABYLON.MeshBuilder.CreateSphere("flash", {diameter: 1, segments: 8}, scene);
+        const flashMat = new BABYLON.StandardMaterial("flashMat", scene);
+        flashMat.diffuseColor = new BABYLON.Color3(1, 0.5, 0);
+        flashMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
+        flashMat.alpha = 0.8;
+        flash.material = flashMat;
+        flash.position.copyFrom(position);
+        
+        // Quick expand and fade
+        let scale = 1;
+        const expandInterval = setInterval(() => {
+            scale += 0.5;
+            flashMat.alpha -= 0.15;
+            flash.scaling.setAll(scale);
+            if (flashMat.alpha <= 0) {
+                clearInterval(expandInterval);
+                flash.dispose();
+            }
+        }, 30);
+        
+        // Apply knockback to nearby blocks only (not the player who dropped it)
+        const explosionRadius = 8;
+        const knockbackForce = 25;
+        
+        // Knockback blocks
+        spawnedBlocks.forEach(block => {
+            if (block && block.physicsImpostor) {
+                const dist = BABYLON.Vector3.Distance(block.position, position);
+                if (dist < explosionRadius) {
+                    const dir = block.position.subtract(position).normalize();
+                    const force = knockbackForce * (1 - dist / explosionRadius);
+                    block.physicsImpostor.applyImpulse(
+                        dir.scale(force).add(new BABYLON.Vector3(0, force * 0.3, 0)),
+                        block.getAbsolutePosition()
+                    );
+                }
+            }
+        });
+        
+        // Emit drone bomb explosion to other players (lighter effect)
+        socket.emit('droneBombExploded', {
+            x: position.x,
+            y: position.y,
+            z: position.z
+        });
+    }
     
     return scene;
 };
@@ -1471,6 +1899,13 @@ scene.registerBeforeRender(function() {
                 p.collider.position.y = p.mesh.position.y + 0.5;
                 p.collider.position.z = p.mesh.position.z;
             }
+            
+            // Smooth interpolation for other player's drone
+            if (p.droneMesh && p.droneTargetX !== undefined) {
+                p.droneMesh.position.x += (p.droneTargetX - p.droneMesh.position.x) * 0.3;
+                p.droneMesh.position.y += (p.droneTargetY - p.droneMesh.position.y) * 0.3;
+                p.droneMesh.position.z += (p.droneTargetZ - p.droneMesh.position.z) * 0.3;
+            }
         }
     });
 });
@@ -1522,11 +1957,12 @@ function addOtherPlayer(playerInfo) {
 }
 
 // Apply animation to other player's character
-function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeChargeLevel) {
+function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeChargeLevel, droneChargeLevel) {
     const mesh = playerData.mesh;
     if (!mesh || !mesh.leftArm || !mesh.rightArm) return;
     
     grenadeChargeLevel = grenadeChargeLevel || 0;
+    droneChargeLevel = droneChargeLevel || 0;
     
     // Handle ultimate charging ball
     if (animState === 'charging' && chargeLevel > 0) {
@@ -1600,8 +2036,42 @@ function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeCh
         }
     }
     
+    // Handle drone charging (cyan box above head)
+    if (animState === 'charging' && droneChargeLevel > 0) {
+        // Create or update drone charging visual
+        if (!playerData.droneChargingBall) {
+            playerData.droneChargingBall = BABYLON.MeshBuilder.CreateBox("otherDroneChargingBall", {size: 0.3}, scene);
+            const chargeMat = new BABYLON.StandardMaterial("otherDroneChargeMat", scene);
+            chargeMat.diffuseColor = new BABYLON.Color3(0, 1, 1);
+            chargeMat.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
+            playerData.droneChargingBall.material = chargeMat;
+        }
+        
+        // Size based on charge
+        const chargePercent = droneChargeLevel / 100;
+        playerData.droneChargingBall.scaling.setAll(0.3 + chargePercent * 0.5);
+        
+        // Position above character
+        playerData.droneChargingBall.position.x = mesh.position.x;
+        playerData.droneChargingBall.position.y = mesh.position.y + 2 + chargePercent;
+        playerData.droneChargingBall.position.z = mesh.position.z;
+        playerData.droneChargingBall.rotation.y += 0.1; // Spin effect
+        
+        // Arms up
+        mesh.leftArm.rotation.x = -1.5;
+        mesh.rightArm.rotation.x = -1.5;
+        mesh.leftArm.rotation.z = 0.5;
+        mesh.rightArm.rotation.z = -0.5;
+    } else {
+        // Dispose drone charging ball if not charging drone
+        if (playerData.droneChargingBall) {
+            playerData.droneChargingBall.dispose();
+            playerData.droneChargingBall = null;
+        }
+    }
+    
     // Handle other animations when not charging anything
-    if (!(animState === 'charging' && (chargeLevel > 0 || grenadeChargeLevel > 0))) {
+    if (!(animState === 'charging' && (chargeLevel > 0 || grenadeChargeLevel > 0 || droneChargeLevel > 0))) {
         if (animState === 'shooting') {
             // One arm punch
             mesh.rightArm.rotation.x = -1.2;
@@ -1667,7 +2137,57 @@ socket.on('playerMoved', (playerInfo) => {
         p.targetZ = p.serverZ;
         
         // Apply animation state immediately
-        applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0, playerInfo.grenadeChargeLevel || 0);
+        applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0, playerInfo.grenadeChargeLevel || 0, playerInfo.droneChargeLevel || 0);
+        
+        // Handle other player's drone
+        if (playerInfo.isDroneMode) {
+            // Create drone mesh if it doesn't exist
+            if (!p.droneMesh) {
+                p.droneMesh = BABYLON.MeshBuilder.CreateBox("otherDrone_" + playerInfo.playerId, {width: 0.8, height: 0.3, depth: 0.8}, scene);
+                const droneMat = new BABYLON.StandardMaterial("otherDroneMat_" + playerInfo.playerId, scene);
+                droneMat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+                droneMat.emissiveColor = new BABYLON.Color3(0, 0.3, 0.3);
+                p.droneMesh.material = droneMat;
+                
+                // Add propellers (small)
+                const propMat = new BABYLON.StandardMaterial("otherPropMat_" + playerInfo.playerId, scene);
+                propMat.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                
+                const prop1 = BABYLON.MeshBuilder.CreateCylinder("prop1", {height: 0.02, diameter: 0.15}, scene);
+                prop1.material = propMat;
+                prop1.parent = p.droneMesh;
+                prop1.position.set(0.25, 0.2, 0.25);
+                
+                const prop2 = BABYLON.MeshBuilder.CreateCylinder("prop2", {height: 0.02, diameter: 0.15}, scene);
+                prop2.material = propMat;
+                prop2.parent = p.droneMesh;
+                prop2.position.set(-0.25, 0.2, 0.25);
+                
+                const prop3 = BABYLON.MeshBuilder.CreateCylinder("prop3", {height: 0.02, diameter: 0.15}, scene);
+                prop3.material = propMat;
+                prop3.parent = p.droneMesh;
+                prop3.position.set(0.25, 0.2, -0.25);
+                
+                const prop4 = BABYLON.MeshBuilder.CreateCylinder("prop4", {height: 0.02, diameter: 0.15}, scene);
+                prop4.material = propMat;
+                prop4.parent = p.droneMesh;
+                prop4.position.set(-0.25, 0.2, -0.25);
+                
+                // Initialize position
+                p.droneMesh.position.set(playerInfo.droneX, playerInfo.droneY, playerInfo.droneZ);
+            }
+            
+            // Store target position for smooth interpolation
+            p.droneTargetX = playerInfo.droneX;
+            p.droneTargetY = playerInfo.droneY;
+            p.droneTargetZ = playerInfo.droneZ;
+        } else {
+            // Dispose drone mesh if player exits drone mode
+            if (p.droneMesh) {
+                p.droneMesh.dispose();
+                p.droneMesh = null;
+            }
+        }
     }
 });
 
@@ -1688,6 +2208,12 @@ socket.on('disconnectPlayer', (playerId) => {
         }
         if (otherPlayers[playerId].grappleLine) {
             otherPlayers[playerId].grappleLine.dispose();
+        }
+        if (otherPlayers[playerId].droneMesh) {
+            otherPlayers[playerId].droneMesh.dispose();
+        }
+        if (otherPlayers[playerId].droneChargingBall) {
+            otherPlayers[playerId].droneChargingBall.dispose();
         }
         delete otherPlayers[playerId];
     }
@@ -1824,7 +2350,55 @@ socket.on('ballShot', (ballData) => {
             cancelGrenade();
             console.log('Grenade cancelled - hit by ball!');
         }
+        
+        if (isChargingDrone) {
+            window.cancelDrone();
+            console.log('Drone cancelled - hit by ball!');
+        }
     });
+    
+    // Check for collision with our drone
+    if (droneMesh && droneMesh.physicsImpostor) {
+        ball.physicsImpostor.registerOnPhysicsCollide(droneMesh.physicsImpostor, () => {
+            // Drone was hit!
+            droneHealth--;
+            
+            // Apply knockback to the drone
+            if (droneMesh) {
+                const knockbackDir = dir.clone().normalize();
+                const knockbackStrength = 3;
+                droneMesh.position.addInPlace(knockbackDir.scale(knockbackStrength));
+                // Also update camera position
+                if (droneCamera) {
+                    droneCamera.position.addInPlace(knockbackDir.scale(knockbackStrength));
+                }
+            }
+            
+            // Flash the screen red (damage indicator)
+            const redOverlay = document.createElement('div');
+            redOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,0,0,0.5);pointer-events:none;z-index:9999;';
+            document.body.appendChild(redOverlay);
+            setTimeout(() => {
+                redOverlay.remove();
+            }, 150);
+            
+            // Flash the drone mesh red too
+            if (droneMesh && droneMesh.material) {
+                const originalColor = droneMesh.material.emissiveColor.clone();
+                droneMesh.material.emissiveColor = new BABYLON.Color3(1, 0, 0);
+                setTimeout(() => {
+                    if (droneMesh && droneMesh.material) {
+                        droneMesh.material.emissiveColor = originalColor;
+                    }
+                }, 200);
+            }
+            
+            // If drone is dead, exit drone mode
+            if (droneHealth <= 0) {
+                window.exitDrone();
+            }
+        });
+    }
     
     // Remove ball after 5 seconds
     setTimeout(() => {
@@ -1851,6 +2425,15 @@ socket.on('ultimateShot', (ultimateData) => {
         // Dispose the ultimate ball after killing
         ultimateBall.dispose();
     });
+    
+    // Check for collision with our drone (instant destroy)
+    if (droneMesh && droneMesh.physicsImpostor) {
+        ultimateBall.physicsImpostor.registerOnPhysicsCollide(droneMesh.physicsImpostor, () => {
+            // Ultimate instantly destroys drone
+            droneHealth = 0;
+            window.exitDrone();
+        });
+    }
     
     // ULTRA fast impulse (5x normal ball speed)
     const dir = new BABYLON.Vector3(ultimateData.dirX, ultimateData.dirY, ultimateData.dirZ);
@@ -1941,6 +2524,11 @@ socket.on('batSwung', (batData) => {
                 cancelGrenade();
                 console.log('Grenade cancelled - hit by bat!');
             }
+            
+            if (isChargingDrone) {
+                window.cancelDrone();
+                console.log('Drone cancelled - hit by bat!');
+            }
         }
     }
 });
@@ -1982,8 +2570,8 @@ socket.on('grenadeShot', (grenadeData) => {
     }, 10000);
 });
 
-// Explode grenade from other player
-function explodeOtherPlayerGrenade(position, size) {
+// Explode grenade from other player (with particles)
+function explodeOtherPlayerGrenade(position, size, shooterId) {
     const numFragments = 100; // More fragments for emphasis
     const fragmentSpeed = 10;
     
@@ -2032,6 +2620,11 @@ function explodeOtherPlayerGrenade(position, size) {
                         knockbackDir.scale(15), // Increased from 10 to 15
                         playerPhysicsBody.getAbsolutePosition()
                     );
+                    
+                    // Track that we were hit by grenade (for death messages)
+                    lastHitterId = shooterId;
+                    lastHitterTime = Date.now();
+                    lastHitCause = "Killed by Grenade";
                 }
             }
         );
@@ -2048,7 +2641,121 @@ function explodeOtherPlayerGrenade(position, size) {
 // Receive grenade explosion from server (triggered by another player's grenade)
 socket.on('grenadeExplosion', (explosionData) => {
     const position = new BABYLON.Vector3(explosionData.x, explosionData.y, explosionData.z);
-    explodeOtherPlayerGrenade(position, explosionData.size);
+    explodeOtherPlayerGrenade(position, explosionData.size, explosionData.shooterId);
+});
+
+// Receive drone bomb explosion from server (lighter effect - just flash and knockback)
+socket.on('droneBombExplosion', (explosionData) => {
+    const position = new BABYLON.Vector3(explosionData.x, explosionData.y, explosionData.z);
+    
+    // Simple flash sphere
+    const flash = BABYLON.MeshBuilder.CreateSphere("flash", {diameter: 1, segments: 8}, scene);
+    const flashMat = new BABYLON.StandardMaterial("flashMat", scene);
+    flashMat.diffuseColor = new BABYLON.Color3(1, 0.5, 0);
+    flashMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
+    flashMat.alpha = 0.8;
+    flash.material = flashMat;
+    flash.position.copyFrom(position);
+    
+    // Quick expand and fade
+    let scale = 1;
+    const expandInterval = setInterval(() => {
+        scale += 0.5;
+        flashMat.alpha -= 0.15;
+        flash.scaling.setAll(scale);
+        if (flashMat.alpha <= 0) {
+            clearInterval(expandInterval);
+            flash.dispose();
+        }
+    }, 30);
+    
+    // Apply knockback to player if nearby (stronger to match grenade power)
+    const explosionRadius = 8;
+    const knockbackForce = 25;
+    
+    if (playerPhysicsBody && !isDead) {
+        const dist = BABYLON.Vector3.Distance(playerPhysicsBody.position, position);
+        if (dist < explosionRadius) {
+            const knockbackDir = playerPhysicsBody.position.subtract(position).normalize();
+            const force = knockbackForce * (1 - dist / explosionRadius);
+            playerPhysicsBody.physicsImpostor.applyImpulse(
+                knockbackDir.scale(force).add(new BABYLON.Vector3(0, force * 0.5, 0)),
+                playerPhysicsBody.getAbsolutePosition()
+            );
+            
+            // Track that we were hit by drone bomb (for death messages)
+            lastHitterId = explosionData.shooterId;
+            lastHitterTime = Date.now();
+            lastHitCause = "Blown up by Drone";
+        }
+    }
+});
+
+// Receive drone bomb dropped by another player (show falling bomb)
+socket.on('droneBombDropped', (bombData) => {
+    const bomb = BABYLON.MeshBuilder.CreateSphere("otherDroneBomb", {diameter: 0.4, segments: 16}, scene);
+    const bombMat = new BABYLON.StandardMaterial("otherBombMat", scene);
+    bombMat.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+    bombMat.emissiveColor = new BABYLON.Color3(0.3, 0, 0);
+    bomb.material = bombMat;
+    
+    bomb.position.set(bombData.x, bombData.y, bombData.z);
+    
+    // Add physics so it falls
+    bomb.physicsImpostor = new BABYLON.PhysicsImpostor(
+        bomb,
+        BABYLON.PhysicsImpostor.SphereImpostor,
+        {mass: 1, restitution: 0.3},
+        scene
+    );
+    
+    // Remove after 5 seconds (explosion handled separately)
+    setTimeout(() => {
+        if (!bomb.isDisposed()) {
+            bomb.dispose();
+        }
+    }, 5000);
+});
+
+// Your drone was hit by a projectile
+socket.on('yourDroneHit', (hitData) => {
+    if (isDroneMode && droneMesh) {
+        droneHealth--;
+        
+        // Apply knockback to the drone
+        if (hitData.dirX !== undefined) {
+            const knockbackDir = new BABYLON.Vector3(hitData.dirX, hitData.dirY, hitData.dirZ).normalize();
+            const knockbackStrength = 3;
+            droneMesh.position.addInPlace(knockbackDir.scale(knockbackStrength));
+            if (droneCamera) {
+                droneCamera.position.addInPlace(knockbackDir.scale(knockbackStrength));
+            }
+        }
+        
+        // Flash the screen red (damage indicator)
+        const redOverlay = document.createElement('div');
+        redOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,0,0,0.5);pointer-events:none;z-index:9999;';
+        document.body.appendChild(redOverlay);
+        setTimeout(() => {
+            redOverlay.remove();
+        }, 150);
+        
+        // Flash the drone mesh red too
+        if (droneMesh.material) {
+            const originalColor = droneMesh.material.emissiveColor.clone();
+            droneMesh.material.emissiveColor = new BABYLON.Color3(1, 0, 0);
+            setTimeout(() => {
+                if (droneMesh && droneMesh.material) {
+                    droneMesh.material.emissiveColor = originalColor;
+                }
+            }, 200);
+        }
+        
+        // If drone is dead, exit drone mode
+        if (droneHealth <= 0) {
+            window.exitDrone();
+        }
+    }
 });
 
 // Receive mine placed by another player
@@ -2316,7 +3023,15 @@ scene.onPointerObservable.add((pointerInfo) => {
         const button = pointerInfo.event.button;
         
         if (button === 0) {
-            // Left click - shoot ball
+            // Left click
+            
+            // If in drone mode, drop a bomb instead of shooting
+            if (isDroneMode) {
+                window.dropDroneBomb();
+                return;
+            }
+            
+            // Normal shooting - shoot ball
             if (!canShoot || isDead) return; // Fire rate limit and death check
             
             canShoot = false;
@@ -2390,8 +3105,8 @@ document.addEventListener('keydown', function(event) {
         isThirdPerson = !isThirdPerson;
     }
 
-    // Jump - only works when grounded
-    if (event.code === "Space") {
+    // Jump - only works when grounded and NOT in drone mode
+    if (event.code === "Space" && !isDroneMode) {
         if (!jumpreloading) {
             // Check if grounded before allowing jump
             var ray = new BABYLON.Ray(playerPhysicsBody.position, new BABYLON.Vector3(0, -1, 0), 1.1);
@@ -2426,6 +3141,20 @@ document.addEventListener('keydown', function(event) {
     if (event.code === "KeyQ") {
         window.startChargingGrenade();
     }
+    
+    // Drone - hold R to charge (auto-deploys when ready)
+    if (event.code === "KeyR") {
+        if (!isDroneMode) {
+            window.startChargingDrone();
+        }
+    }
+    
+    // Exit drone mode with P
+    if (event.code === "KeyP") {
+        if (isDroneMode) {
+            window.exitDrone();
+        }
+    }
 });
 
 document.addEventListener('keyup', function(event) {
@@ -2439,6 +3168,11 @@ document.addEventListener('keyup', function(event) {
     // Cancel grenade if Q is released (same as ultimate)
     if (event.code === "KeyQ") {
         cancelGrenade();
+    }
+    
+    // Cancel drone if R is released before fully charged
+    if (event.code === "KeyR") {
+        window.cancelDrone();
     }
 });
 
