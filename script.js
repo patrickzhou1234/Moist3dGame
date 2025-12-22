@@ -1736,7 +1736,7 @@ var createScene = function () {
                 });
                 
                 droneModel.parent = droneCollider;
-                droneModel.position = new BABYLON.Vector3(0, 0.6, 0); // Offset up to align model with collider
+                droneModel.position = new BABYLON.Vector3(0, -0.4, 0); // Offset down to center model on collider (model pivot is below mesh)
                 droneModel.scaling = new BABYLON.Vector3(5, 5, 5);
                 droneCollider.droneModel = droneModel;
             }
@@ -2316,7 +2316,7 @@ socket.on('playerMoved', (playerInfo) => {
                         });
                         
                         droneModel.parent = p.droneMesh;
-                        droneModel.position = new BABYLON.Vector3(0, 0.6, 0); // Offset up to align model with collider
+                        droneModel.position = new BABYLON.Vector3(0, -0.6, 0); // Offset down to center model on collider (model pivot is below mesh)
                         droneModel.scaling = new BABYLON.Vector3(5, 5, 5);
                         p.droneMesh.droneModel = droneModel;
                     }
