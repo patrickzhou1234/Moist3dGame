@@ -473,6 +473,7 @@ let canDropBomb = true;
 const DRONE_MODEL_URL = "https://files.catbox.moe/z7hxt9.glb";
 const ULTIMATE_MODEL_URL = "https://files.catbox.moe/84ufxa.glb"; // TODO: Replace with actual ultimate model URL
 const BALL_MODEL_URL = "https://files.catbox.moe/5esvct.glb"; // TODO: Replace with actual ball model URL
+const KATANA_MODEL_URL = "https://files.catbox.moe/nlqntj.glb"; // TODO: Replace with actual katana model URL
 
 // ============ HELPER FUNCTIONS ============
 
@@ -836,16 +837,39 @@ var createScene = function () {
     player = createCharacterMesh(scene, "player", new BABYLON.Color3(0.2, 0.6, 1), myUsername);
     player.position.y = 3;
 
-    // Create bat attached to player's right arm
+    // Create bat attached to player's right arm (invisible physics hitbox)
     batMesh = BABYLON.MeshBuilder.CreateCapsule("bat", {height: 3.0, radius: 0.08}, scene);
-    const batMat = new BABYLON.StandardMaterial("batMat", scene);
-    batMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown
-    batMat.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.025);
-    batMesh.material = batMat;
     batMesh.parent = player.rightArm; // Attach to right arm
     batMesh.position.set(0, -1.5, 0); // Position at end of arm
     batMesh.rotation.set(0, 0, 0);
-    batMesh.visibility = 0; // Hidden until swing
+    batMesh.visibility = 0; // Always invisible - katana model will be shown instead
+    
+    // Load katana 3D model (cached from preload)
+    BABYLON.SceneLoader.ImportMesh("", KATANA_MODEL_URL, "", scene, function(meshes) {
+        if (meshes.length > 0 && batMesh && !batMesh.isDisposed()) {
+            const katanaModel = new BABYLON.TransformNode("katanaModel", scene);
+            
+            meshes.forEach(mesh => {
+                mesh.parent = katanaModel;
+                mesh.isPickable = false;
+            });
+            
+            katanaModel.parent = batMesh;
+            katanaModel.position = new BABYLON.Vector3(0, 0, 0); // Adjust X, Y, Z as needed to align with hand
+            katanaModel.scaling = new BABYLON.Vector3(3, 3, 3); // 3x larger
+            katanaModel.rotation = new BABYLON.Vector3(0, 0, Math.PI); // 180 degrees flip around Z-axis
+            batMesh.katanaModel = katanaModel;
+            katanaModel.setEnabled(false); // Hidden until swing
+        }
+    }, null, function(scene, message, exception) {
+        console.error("Failed to load katana model:", message, exception);
+        // Fallback: make the capsule visible with a material
+        const batMat = new BABYLON.StandardMaterial("batMat", scene);
+        batMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1);
+        batMat.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.025);
+        batMesh.material = batMat;
+        // Visibility will be controlled by swingBat function
+    });
 
     frontfacing = BABYLON.Mesh.CreateBox("front", 1, scene);
     frontfacing.visibility = 0.5;
@@ -1505,8 +1529,12 @@ var createScene = function () {
         canSwingBat = false;
         isSwingingBat = true;
         
-        // Show bat
-        batMesh.visibility = 1;
+        // Show katana model (or fallback to capsule visibility)
+        if (batMesh.katanaModel) {
+            batMesh.katanaModel.setEnabled(true);
+        } else {
+            batMesh.visibility = 1;
+        }
         
         // Store original arm rotation
         const originalArmRotX = player.rightArm.rotation.x;
@@ -1533,7 +1561,12 @@ var createScene = function () {
             
             if (frame >= totalFrames) {
                 clearInterval(swingInterval);
-                batMesh.visibility = 0;
+                // Hide katana model (or fallback to capsule visibility)
+                if (batMesh.katanaModel) {
+                    batMesh.katanaModel.setEnabled(false);
+                } else {
+                    batMesh.visibility = 0;
+                }
                 isSwingingBat = false;
                 
                 // Reset arm to original position
@@ -1564,7 +1597,7 @@ var createScene = function () {
     
     // Check for bat hits
     function checkBatHits() {
-        if (!batMesh || batMesh.visibility === 0) return;
+        if (!batMesh || !isSwingingBat) return;
         
         // Get bat world position (since it's parented to arm)
         const batWorldPos = batMesh.getAbsolutePosition();
@@ -2079,6 +2112,14 @@ function preloadModels() {
     }, null, function(scene, message, exception) {
         console.warn("Failed to preload ball model (will load on first use):", message);
     });
+    
+    // Preload katana model - load it once to cache, then dispose
+    BABYLON.SceneLoader.LoadAssetContainer(KATANA_MODEL_URL, "", scene, function(container) {
+        console.log("Katana model cached successfully");
+        // Don't add to scene, just caching for later use
+    }, null, function(scene, message, exception) {
+        console.warn("Failed to preload katana model (will load on first use):", message);
+    });
 }
 
 // Preload models on startup
@@ -2150,13 +2191,35 @@ function addOtherPlayer(playerInfo) {
     
     // Create bat for this player (attached to their right arm, hidden by default)
     const otherBat = BABYLON.MeshBuilder.CreateCapsule("otherBat_" + playerInfo.playerId, {height: 3.0, radius: 0.08}, scene);
-    const otherBatMat = new BABYLON.StandardMaterial("otherBatMat_" + playerInfo.playerId, scene);
-    otherBatMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1);
-    otherBatMat.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.025);
-    otherBat.material = otherBatMat;
     otherBat.parent = mesh.rightArm;
     otherBat.position.set(0, -1.5, 0);
-    otherBat.visibility = 0;
+    otherBat.visibility = 0; // Always invisible - katana model will be shown instead
+    
+    // Load katana 3D model for this player (cached from preload)
+    BABYLON.SceneLoader.ImportMesh("", KATANA_MODEL_URL, "", scene, function(meshes) {
+        if (meshes.length > 0 && otherBat && !otherBat.isDisposed()) {
+            const katanaModel = new BABYLON.TransformNode("otherKatanaModel_" + playerInfo.playerId, scene);
+            
+            meshes.forEach(mesh => {
+                mesh.parent = katanaModel;
+                mesh.isPickable = false;
+            });
+            
+            katanaModel.parent = otherBat;
+            katanaModel.position = new BABYLON.Vector3(0, 0, 0); // Adjust X, Y, Z as needed to align with hand
+            katanaModel.scaling = new BABYLON.Vector3(3, 3, 3); // 3x larger
+            katanaModel.rotation = new BABYLON.Vector3(0, 0, Math.PI); // 180 degrees flip around Z-axis
+            otherBat.katanaModel = katanaModel;
+            katanaModel.setEnabled(false); // Hidden until swing
+        }
+    }, null, function(scene, message, exception) {
+        console.error("Failed to load other player katana model:", message, exception);
+        // Fallback: make the capsule visible with a material when swinging
+        const otherBatMat = new BABYLON.StandardMaterial("otherBatMat_" + playerInfo.playerId, scene);
+        otherBatMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1);
+        otherBatMat.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.025);
+        otherBat.material = otherBatMat;
+    });
     
     // Physics collider (invisible, for collisions)
     const collider = BABYLON.MeshBuilder.CreateSphere("otherCollider_" + playerInfo.playerId, {diameter: 1.5, segments: 8}, scene);
@@ -2718,9 +2781,13 @@ socket.on('batSwung', (batData) => {
         const bat = otherPlayer.batMesh;
         
         if (mesh && mesh.rightArm) {
-            // Show the bat
+            // Show the katana model (or fallback to capsule visibility)
             if (bat) {
-                bat.visibility = 1;
+                if (bat.katanaModel) {
+                    bat.katanaModel.setEnabled(true);
+                } else {
+                    bat.visibility = 1;
+                }
             }
             
             // Store original arm rotation
@@ -2728,10 +2795,10 @@ socket.on('batSwung', (batData) => {
             const originalRotZ = mesh.rightArm.rotation.z;
             const originalRotY = mesh.rightArm.rotation.y || 0;
             
-            // Animate the swing (must match BAT_SWING_DURATION = 300ms)
+            // Animate the swing (must match BAT_SWING_DURATION)
             let frame = 0;
             const totalFrames = 25;
-            const swingDuration = 300; // Match BAT_SWING_DURATION
+            const swingDuration = BAT_SWING_DURATION; // Match BAT_SWING_DURATION
             const swingInterval = setInterval(() => {
                 frame++;
                 const progress = frame / totalFrames;
@@ -2747,9 +2814,13 @@ socket.on('batSwung', (batData) => {
                     mesh.rightArm.rotation.z = originalRotZ;
                     mesh.rightArm.rotation.y = originalRotY;
                     
-                    // Hide the bat after swing
+                    // Hide the katana model after swing (or fallback to capsule)
                     if (bat) {
-                        bat.visibility = 0;
+                        if (bat.katanaModel) {
+                            bat.katanaModel.setEnabled(false);
+                        } else {
+                            bat.visibility = 0;
+                        }
                     }
                 }
             }, swingDuration / totalFrames);
