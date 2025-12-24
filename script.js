@@ -481,6 +481,7 @@ const BALL_MODEL_URL = "https://files.catbox.moe/5esvct.glb"; // TODO: Replace w
 const KATANA_MODEL_URL = "https://files.catbox.moe/nlqntj.glb"; // TODO: Replace with actual katana model URL
 const DRONE_BOMB_MODEL_URL = "https://files.catbox.moe/qeyyrr.glb"; // TODO: Replace with actual drone bomb model URL
 const GRENADE_MODEL_URL = "https://files.catbox.moe/nmw7yv.glb"; // TODO: Replace with actual grenade model URL
+const MINE_MODEL_URL = "https://files.catbox.moe/qmnt2u.glb"; // TODO: Replace with actual mine model URL
 
 // ============ HELPER FUNCTIONS ============
 
@@ -563,33 +564,75 @@ function createMineMesh(mineId, position) {
     }, scene);
     
     mine.position.copyFrom(position);
-    
-    const mineMat = new BABYLON.StandardMaterial("mineMat_" + mineId, scene);
-    mineMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
-    mineMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
-    mine.material = mineMat;
-    
-    mine.enableEdgesRendering();
-    mine.edgesWidth = 3.0;
-    mine.edgesColor = new BABYLON.Color4(1, 0.3, 0.3, 1);
+    mine.visibility = 0; // Make invisible, only show the 3D model
     
     mine.mineId = mineId;
     
-    let flashState = true;
-    mine.flashInterval = setInterval(() => {
-        if (mine.isDisposed()) {
-            clearInterval(mine.flashInterval);
-            return;
+    // Load the mine 3D model
+    BABYLON.SceneLoader.ImportMesh("", MINE_MODEL_URL, "", scene, function(meshes) {
+        if (meshes.length > 0 && mine && !mine.isDisposed()) {
+            const mineModel = new BABYLON.TransformNode("mineModel_" + mineId, scene);
+            
+            meshes.forEach(mesh => {
+                mesh.parent = mineModel;
+                mesh.isPickable = false;
+            });
+            
+            mineModel.parent = mine;
+            mineModel.position = new BABYLON.Vector3(0, 0, 0);
+            mineModel.scaling = new BABYLON.Vector3(0.52, 0.52, 0.52); // Adjust scale as needed
+            mineModel.rotation.x = -Math.PI / 2; // Rotate to lay flat on the ground
+            mine.mineModel = mineModel;
+            
+            // Add flashing effect to the 3D model
+            let flashState = true;
+            mine.flashInterval = setInterval(() => {
+                if (mine.isDisposed() || !mineModel) {
+                    clearInterval(mine.flashInterval);
+                    return;
+                }
+                flashState = !flashState;
+                // Apply emissive flashing to all meshes in the model
+                meshes.forEach(mesh => {
+                    if (mesh.material) {
+                        if (flashState) {
+                            mesh.material.emissiveColor = new BABYLON.Color3(0.8, 0, 0);
+                        } else {
+                            mesh.material.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
+                        }
+                    }
+                });
+            }, 300);
         }
-        flashState = !flashState;
-        if (flashState) {
-            mineMat.emissiveColor = new BABYLON.Color3(0.8, 0, 0);
-            mineMat.diffuseColor = new BABYLON.Color3(1, 0.2, 0.2);
-        } else {
-            mineMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
-            mineMat.diffuseColor = new BABYLON.Color3(0.5, 0, 0);
-        }
-    }, 300);
+    }, null, function(scene, message, exception) {
+        console.error("Failed to load mine model:", message, exception);
+        // Fallback: make visible with red material
+        mine.visibility = 1;
+        const mineMat = new BABYLON.StandardMaterial("mineMat_" + mineId, scene);
+        mineMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
+        mineMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
+        mine.material = mineMat;
+        
+        mine.enableEdgesRendering();
+        mine.edgesWidth = 3.0;
+        mine.edgesColor = new BABYLON.Color4(1, 0.3, 0.3, 1);
+        
+        let flashState = true;
+        mine.flashInterval = setInterval(() => {
+            if (mine.isDisposed()) {
+                clearInterval(mine.flashInterval);
+                return;
+            }
+            flashState = !flashState;
+            if (flashState) {
+                mineMat.emissiveColor = new BABYLON.Color3(0.8, 0, 0);
+                mineMat.diffuseColor = new BABYLON.Color3(1, 0.2, 0.2);
+            } else {
+                mineMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
+                mineMat.diffuseColor = new BABYLON.Color3(0.5, 0, 0);
+            }
+        }, 300);
+    });
     
     return mine;
 }
@@ -598,6 +641,7 @@ function createMineMesh(mineId, position) {
 function disposeMine(mine) {
     if (mine) {
         if (mine.flashInterval) clearInterval(mine.flashInterval);
+        if (mine.mineModel) mine.mineModel.dispose();
         mine.dispose();
     }
 }
@@ -2259,7 +2303,8 @@ function preloadModels() {
         { url: BALL_MODEL_URL, name: "Ball" },
         { url: KATANA_MODEL_URL, name: "Katana" },
         { url: DRONE_BOMB_MODEL_URL, name: "Drone Bomb" },
-        { url: GRENADE_MODEL_URL, name: "Grenade" }
+        { url: GRENADE_MODEL_URL, name: "Grenade" },
+        { url: MINE_MODEL_URL, name: "Mine" }
     ];
     
     let loadedCount = 0;
@@ -2533,7 +2578,7 @@ function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeCh
                     
                     grenadeModel.parent = playerData.grenadeChargingBall;
                     grenadeModel.position = new BABYLON.Vector3(0, 0, 0);
-                    grenadeModel.scaling = new BABYLON.Vector3(0.3, 0.3, 0.3); // Scale for charging grenade
+                    grenadeModel.scaling = new BABYLON.Vector3(0.03, 0.03, 0.03); // Scale for charging grenade (same as local player)
                     playerData.grenadeChargingBall.grenadeModel = grenadeModel;
                 }
             }, null, function(scene, message, exception) {
