@@ -1610,7 +1610,7 @@ var createScene = function () {
     
     // Start charging ultimate
     window.startChargingUltimate = function() {
-        if (!isDead && !isChargingUltimate) {
+        if (!isDead && !isChargingUltimate && !isChargingGrenade && !isChargingDrone && !isSwingingBat) {
             isChargingUltimate = true;
             ultimateCharge = 0;
             document.getElementById('ultimateContainer').style.display = 'block';
@@ -1619,7 +1619,7 @@ var createScene = function () {
     
     // Swing bat
     window.swingBat = function() {
-        if (!canSwingBat || isDead || isSwingingBat) return;
+        if (!canSwingBat || isDead || isSwingingBat || isChargingUltimate || isChargingGrenade || isChargingDrone) return;
         
         canSwingBat = false;
         isSwingingBat = true;
@@ -1879,7 +1879,7 @@ var createScene = function () {
     
     // Start charging grenade
     window.startChargingGrenade = function() {
-        if (isDead || isChargingGrenade || isDroneMode) return;
+        if (isDead || isChargingGrenade || isDroneMode || isChargingUltimate || isChargingDrone || isSwingingBat) return;
         isChargingGrenade = true;
         grenadeCharge = 0;
         currentAnimState = 'charging';
@@ -1887,7 +1887,7 @@ var createScene = function () {
     
     // Start charging drone
     window.startChargingDrone = function() {
-        if (isDead || isChargingDrone || isDroneMode) return;
+        if (isDead || isChargingDrone || isDroneMode || isChargingUltimate || isChargingGrenade || isSwingingBat) return;
         isChargingDrone = true;
         droneCharge = 0;
         currentAnimState = 'charging';
@@ -2211,8 +2211,8 @@ var createScene = function () {
         createFlashEffect(position);
         
         // Apply knockback to nearby blocks only (not the player who dropped it)
-        const explosionRadius = 8;
-        const knockbackForce = 25;
+        const explosionRadius = 16;
+        const knockbackForce = 50;
         
         // Knockback blocks
         spawnedBlocks.forEach(block => {
@@ -3282,8 +3282,8 @@ socket.on('droneBombExplosion', (explosionData) => {
     createFlashEffect(position);
     
     // Apply knockback to player if nearby (stronger to match grenade power)
-    const explosionRadius = 8;
-    const knockbackForce = 25;
+    const explosionRadius = 16;
+    const knockbackForce = 50;
     
     if (playerPhysicsBody && !isDead) {
         const dist = BABYLON.Vector3.Distance(playerPhysicsBody.position, position);
@@ -3669,7 +3669,7 @@ scene.onPointerObservable.add((pointerInfo) => {
             }
             
             // Normal shooting - shoot ball
-            if (!canShoot || isDead) return; // Fire rate limit and death check
+            if (!canShoot || isDead || isChargingUltimate || isChargingGrenade || isChargingDrone) return; // Fire rate limit and death check
             
             canShoot = false;
             setTimeout(() => { canShoot = true; }, SHOOT_COOLDOWN);
