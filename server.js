@@ -184,7 +184,8 @@ app.get('/api/leaderboard', (req, res) => {
             kills: entry.kills,
             deaths: entry.deaths,
             kdr: entry.kdr,
-            gamesPlayed: entry.games_played
+            gamesPlayed: entry.games_played,
+            isAdmin: entry.is_admin === 1
         }))
     });
 });
@@ -355,7 +356,8 @@ rooms.push({
     type: 'public',
     players: {},
     blocks: [],
-    code: null // No code for public rooms
+    code: null, // No code for public rooms
+    hardcoreMode: false // No walls in hardcore mode
 });
 
 // Helper function to generate room code
@@ -379,6 +381,7 @@ function getAdminData() {
             maxPlayers: room.maxPlayers,
             type: room.type,
             code: room.code,
+            hardcoreMode: room.hardcoreMode || false,
             playerCount: Object.keys(room.players).length,
             blockCount: room.blocks.length,
             players: Object.values(room.players).map(p => ({
@@ -493,6 +496,13 @@ io.on('connection', (socket) => {
             }
         });
         socket.emit('currentPlayers', roomPlayers);
+        
+        // Emit room settings (including hardcore mode)
+        socket.emit('roomSettings', {
+            roomId: room.id,
+            roomName: room.name,
+            hardcoreMode: room.hardcoreMode || false
+        });
         
         // Emit existing blocks in the room to the new client
         socket.emit('currentBlocks', room.blocks);
@@ -920,13 +930,15 @@ io.on('connection', (socket) => {
             maxPlayers: roomData.maxPlayers,
             type: roomData.type,
             code: roomCode,
+            hardcoreMode: roomData.hardcoreMode || false,
             players: {},
             blocks: []
         };
         rooms.push(newRoom);
         broadcastToAdmins('adminData', getAdminData());
         const codeMsg = roomCode ? ` (Code: ${roomCode})` : '';
-        broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomData.name}" created${codeMsg}` });
+        const hardcoreMsg = newRoom.hardcoreMode ? ' [HARDCORE]' : '';
+        broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomData.name}" created${codeMsg}${hardcoreMsg}` });
     });
 
     socket.on('adminDeleteRoom', (roomId) => {
@@ -941,6 +953,28 @@ io.on('connection', (socket) => {
             rooms.splice(index, 1);
             broadcastToAdmins('adminData', getAdminData());
             broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomName}" deleted` });
+        }
+    });
+
+    socket.on('adminToggleHardcore', (roomId) => {
+        if (!adminSockets.has(socket)) return;
+        
+        const room = rooms.find(r => r.id === roomId);
+        if (room) {
+            room.hardcoreMode = !room.hardcoreMode;
+            
+            // Notify all players in the room about the mode change
+            io.to(roomId).emit('roomSettings', {
+                roomId: room.id,
+                roomName: room.name,
+                hardcoreMode: room.hardcoreMode
+            });
+            
+            broadcastToAdmins('adminData', getAdminData());
+            broadcastToAdmins('adminLog', { 
+                type: 'action', 
+                message: `Room "${room.name}" hardcore mode ${room.hardcoreMode ? 'ENABLED' : 'DISABLED'}` 
+            });
         }
     });
 

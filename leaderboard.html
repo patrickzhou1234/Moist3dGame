@@ -169,6 +169,36 @@
             to { transform: rotate(360deg); }
         }
         
+        /* Rainbow Admin Badge */
+        .admin-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-left: 8px;
+            background: linear-gradient(90deg, 
+                #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3, #ff0000);
+            background-size: 400% 100%;
+            animation: rainbow-flow 3s linear infinite;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            box-shadow: 0 2px 10px rgba(255, 100, 255, 0.4);
+        }
+        
+        .admin-badge-large {
+            padding: 4px 12px;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        @keyframes rainbow-flow {
+            0% { background-position: 0% 50%; }
+            100% { background-position: 400% 50%; }
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px;
@@ -328,6 +358,7 @@
                             <div class="medal">🥈</div>
                             <div class="avatar">${top3[1].username.substring(0, 2).toUpperCase()}</div>
                             <div class="name">${top3[1].username}</div>
+                            ${top3[1].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
                             <div class="kills">${top3[1].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
@@ -335,6 +366,7 @@
                             <div class="medal">🥇</div>
                             <div class="avatar">${top3[0].username.substring(0, 2).toUpperCase()}</div>
                             <div class="name">${top3[0].username}</div>
+                            ${top3[0].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
                             <div class="kills">${top3[0].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
@@ -342,6 +374,7 @@
                             <div class="medal">🥉</div>
                             <div class="avatar">${top3[2].username.substring(0, 2).toUpperCase()}</div>
                             <div class="name">${top3[2].username}</div>
+                            ${top3[2].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
                             <div class="kills">${top3[2].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
@@ -360,13 +393,15 @@
                 if (player.kdr >= 1.5) kdrClass = 'kdr-positive';
                 else if (player.kdr < 1) kdrClass = 'kdr-negative';
                 
+                const adminBadge = player.isAdmin ? '<span class="admin-badge">Admin</span>' : '';
+                
                 return `
                     <tr onclick="viewProfile('${player.profileId}')" style="cursor:pointer;">
                         <td class="rank ${rankClass}">#${player.rank}</td>
                         <td>
                             <div class="player-cell">
                                 <div class="player-avatar">${player.username.substring(0, 2).toUpperCase()}</div>
-                                <div class="player-name">${player.username}</div>
+                                <div class="player-name">${player.username}${adminBadge}</div>
                             </div>
                         </td>
                         <td class="stat-cell">${player.kills}</td>

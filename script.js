@@ -426,6 +426,7 @@ let lastHitCause = null; // Track what caused the last hit
 // Death/respawn state
 let isDead = false;
 const DEATH_HEIGHT = -15;
+const DEATH_CEILING = 100; // Die if you go above this height
 const SPAWN_POSITION = new BABYLON.Vector3(0, 3, 0);
 
 // Ultimate ability state
@@ -443,7 +444,7 @@ let isSwingingBat = false;
 let canSwingBat = true;
 const BAT_COOLDOWN = 1500; // 1.5 seconds
 const BAT_SWING_DURATION = 300; // ms - slower swing
-const BAT_KNOCKBACK_FORCE = 18; // MASSIVE knockback
+const BAT_KNOCKBACK_FORCE = 60; // MASSIVE knockback
 const BAT_RANGE = 3.0; // Extended range for long bat
 
 // Grenade state
@@ -863,6 +864,7 @@ var createScene = function () {
     var wallz = [15, 0, 0, -15];
     var wallrot = [0, 1, 1, 0];
     var wallx = [null, -15, 15, null];
+    const walls = []; // Store walls for hardcore mode toggle
     for (let i=0; i<4; i++) {
         var wall = BABYLON.MeshBuilder.CreateBox("wall", {width:30, height:2, depth:0.5}, scene);
         wall.physicsImpostor = new BABYLON.PhysicsImpostor(wall, BABYLON.PhysicsImpostor.BoxImpostor, {mass:0, restitution: 0.9}, scene);
@@ -875,7 +877,11 @@ var createScene = function () {
         if (!(wallx[i] == null)) {
             wall.position.x = wallx[i];
         }
+        walls.push(wall);
     }
+    
+    // Store walls globally for hardcore mode toggle
+    window.arenaWalls = walls;
 
     // Skybox gradient
     var bluemat = new BABYLON.StandardMaterial("bluemat", scene);
@@ -940,11 +946,11 @@ var createScene = function () {
     jumpreloading = false;
 
     scene.registerBeforeRender(function() {
-        // Check for death (fell below world)
-        if (!isDead && playerPhysicsBody.position.y < DEATH_HEIGHT) {
+        // Check for death (fell below world or went too high)
+        if (!isDead && (playerPhysicsBody.position.y < DEATH_HEIGHT || playerPhysicsBody.position.y > DEATH_CEILING)) {
             // Determine if it was a suicide or kill based on last hit
             let killerId = null;
-            let cause = "Fell to Death";
+            let cause = playerPhysicsBody.position.y > DEATH_CEILING ? "Flew Too High" : "Fell to Death";
             
             if (Date.now() - lastHitterTime < 5000) { // If hit in last 5 seconds
                 killerId = lastHitterId;
@@ -2271,7 +2277,8 @@ function handleMovement() {
         hasInput = true;
     }
 
-    if (hasInput) {
+    // Only apply movement if there's an actual movement direction (prevents W+S or A+D canceling knockback)
+    if (hasInput && moveDirection.length() > 0.01) {
         moveDirection.normalize();
         const currentVel = playerPhysicsBody.physicsImpostor.getLinearVelocity();
         // Apply velocity directly for instant response, preserving Y (gravity)
@@ -2699,6 +2706,46 @@ socket.on('currentPlayers', (players) => {
     });
 });
 
+// Room settings (hardcore mode, etc.)
+let isHardcoreMode = false;
+socket.on('roomSettings', (settings) => {
+    console.log('Room settings received:', settings);
+    isHardcoreMode = settings.hardcoreMode;
+    
+    // Toggle wall visibility and physics based on hardcore mode
+    if (window.arenaWalls) {
+        window.arenaWalls.forEach(wall => {
+            if (isHardcoreMode) {
+                // Hide walls and disable physics
+                wall.setEnabled(false);
+                if (wall.physicsImpostor) {
+                    wall.physicsImpostor.setMass(0);
+                    wall.physicsImpostor.dispose();
+                }
+            } else {
+                // Show walls and restore physics
+                wall.setEnabled(true);
+                if (!wall.physicsImpostor || wall.physicsImpostor.isDisposed) {
+                    wall.physicsImpostor = new BABYLON.PhysicsImpostor(wall, BABYLON.PhysicsImpostor.BoxImpostor, {mass:0, restitution: 0.9}, scene);
+                }
+            }
+        });
+    }
+    
+    // Show notification about mode
+    if (settings.hardcoreMode) {
+        Swal.fire({
+            icon: 'warning',
+            title: '☠️ HARDCORE MODE',
+            text: 'No walls! Fall off and you die!',
+            timer: 3000,
+            showConfirmButton: false,
+            background: '#1a1a2e',
+            color: '#fff'
+        });
+    }
+});
+
 socket.on('currentBlocks', (blocks) => {
     blocks.forEach((block) => {
         spawnBlock(block);
@@ -2923,7 +2970,7 @@ socket.on('ballShot', (ballData) => {
     // Check for collision with player
     ball.physicsImpostor.registerOnPhysicsCollide(playerPhysicsBody.physicsImpostor, () => {
         // Apply massive knockback to player when hit
-        const knockbackStrength = 3; 
+        const knockbackStrength = 12; 
         const knockbackDir = dir.clone();
         knockbackDir.y += 0.5; // Add some lift
         knockbackDir.normalize();
@@ -2947,7 +2994,7 @@ socket.on('ballShot', (ballData) => {
             // Apply knockback to the drone
             if (droneMesh) {
                 const knockbackDir = dir.clone().normalize();
-                const knockbackStrength = 3;
+                const knockbackStrength = 12;
                 droneMesh.position.addInPlace(knockbackDir.scale(knockbackStrength));
                 // Also update camera position
                 if (droneCamera) {
@@ -3416,7 +3463,7 @@ socket.on('yourDroneHit', (hitData) => {
         // Apply knockback to the drone
         if (hitData.dirX !== undefined) {
             const knockbackDir = new BABYLON.Vector3(hitData.dirX, hitData.dirY, hitData.dirZ).normalize();
-            const knockbackStrength = 3;
+            const knockbackStrength = 12;
             droneMesh.position.addInPlace(knockbackDir.scale(knockbackStrength));
             if (droneCamera) {
                 droneCamera.position.addInPlace(knockbackDir.scale(knockbackStrength));

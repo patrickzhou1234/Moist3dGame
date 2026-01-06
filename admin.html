@@ -553,6 +553,10 @@
                             <option value="private">Private</option>
                         </select>
                     </div>
+                    <div class="form-group" style="display:flex; align-items:center; gap:10px; padding-top:25px;">
+                        <input type="checkbox" id="hardcoreMode" style="width:20px; height:20px;">
+                        <label for="hardcoreMode" style="margin:0; cursor:pointer;">☠️ Hardcore (No Walls)</label>
+                    </div>
                     <button class="mui-btn mui-btn--primary mui-btn--raised" onclick="createRoom()">
                         Create Room
                     </button>
@@ -798,6 +802,7 @@
                         <span>👥 ${room.playerCount}/${room.maxPlayers}</span>
                         <span>📦 ${room.blockCount} blocks</span>
                         <span>${room.type === 'private' ? '🔒' : '🌐'} ${room.type}</span>
+                        ${room.hardcoreMode ? '<span style="color:#e53935;">☠️ Hardcore</span>' : ''}
                     </div>
                     ${room.code ? `
                         <div style="margin-top:10px; padding:8px; background:rgba(156,39,176,0.2); border-radius:6px; text-align:center;">
@@ -812,6 +817,9 @@
                     ` : ''}
                     <div class="room-actions">
                         <button class="mui-btn mui-btn--small" onclick="viewRoom('${room.id}')">View</button>
+                        <button class="mui-btn mui-btn--small" style="background:${room.hardcoreMode ? '#e53935' : '#ff9800'};" onclick="toggleHardcore('${room.id}')">
+                            ${room.hardcoreMode ? '☠️ Hardcore ON' : '🛡️ Normal'}
+                        </button>
                         <button class="mui-btn mui-btn--danger mui-btn--small" onclick="deleteRoom('${room.id}')">Delete</button>
                     </div>
                 </div>
@@ -866,9 +874,15 @@
             const name = document.getElementById('roomName').value || 'Room ' + Date.now();
             const maxPlayers = parseInt(document.getElementById('maxPlayers').value);
             const type = document.getElementById('roomType').value;
+            const hardcoreMode = document.getElementById('hardcoreMode').checked;
             
-            socket.emit('adminCreateRoom', { name, maxPlayers, type });
+            socket.emit('adminCreateRoom', { name, maxPlayers, type, hardcoreMode });
             document.getElementById('roomName').value = '';
+            document.getElementById('hardcoreMode').checked = false;
+        }
+        
+        function toggleHardcore(roomId) {
+            socket.emit('adminToggleHardcore', roomId);
         }
         
         function deleteRoom(roomId) {

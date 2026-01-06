@@ -232,7 +232,7 @@ const statements = {
     
     // Leaderboard
     getLeaderboard: db.prepare(`
-        SELECT ps.*, u.username, u.profile_id,
+        SELECT ps.*, u.username, u.profile_id, u.is_admin,
             CASE WHEN ps.deaths > 0 THEN ROUND(CAST(ps.kills AS FLOAT) / ps.deaths, 2) ELSE ps.kills END as kdr
         FROM player_stats ps
         JOIN users u ON ps.user_id = u.id
