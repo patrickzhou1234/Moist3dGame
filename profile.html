@@ -241,6 +241,203 @@
             color: #ff9800 !important;
             -webkit-text-fill-color: #ff9800 !important;
         }
+        
+        /* VIP Badge with sparkle effect */
+        .vip-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-left: 8px;
+            background: linear-gradient(135deg, #ffd700, #ff8c00, #ffd700);
+            background-size: 200% 200%;
+            animation: vip-shimmer 2s ease-in-out infinite;
+            color: #000;
+            text-shadow: 0 0 2px rgba(255,255,255,0.5);
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.5), 0 0 30px rgba(255, 140, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .vip-badge::before {
+            content: '✨';
+            position: absolute;
+            left: -20px;
+            animation: vip-sparkle 2s ease-in-out infinite;
+        }
+        
+        .vip-badge::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(
+                to right,
+                transparent 0%,
+                rgba(255, 255, 255, 0.4) 50%,
+                transparent 100%
+            );
+            transform: rotate(30deg);
+            animation: vip-shine 3s ease-in-out infinite;
+        }
+        
+        @keyframes vip-shimmer {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+        
+        @keyframes vip-sparkle {
+            0%, 100% { opacity: 0; transform: translateX(0) scale(0.5); }
+            50% { opacity: 1; transform: translateX(30px) scale(1); }
+        }
+        
+        @keyframes vip-shine {
+            0% { left: -100%; }
+            20%, 100% { left: 100%; }
+        }
+        
+        .vip-badge-large {
+            padding: 5px 14px;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        /* Rainbow Admin Badge */
+        .admin-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-left: 8px;
+            background: linear-gradient(90deg, 
+                #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3, #ff0000);
+            background-size: 400% 100%;
+            animation: rainbow-flow 3s linear infinite;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            box-shadow: 0 2px 10px rgba(255, 100, 255, 0.4);
+        }
+        
+        .admin-badge-large {
+            padding: 4px 12px;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        @keyframes rainbow-flow {
+            0% { background-position: 0% 50%; }
+            100% { background-position: 400% 50%; }
+        }
+        
+        /* Profile customization for VIP */
+        .profile-bio {
+            background: rgba(255, 215, 0, 0.1);
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            font-style: italic;
+            color: #e0e0e0;
+        }
+        
+        .profile-title {
+            color: #ffd700;
+            font-size: 14px;
+            font-weight: 500;
+            margin-top: 5px;
+        }
+        
+        .avatar-photo {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid #4a90d9;
+        }
+        
+        .avatar-vip {
+            border: 3px solid #ffd700;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+        }
+        
+        /* Edit profile section */
+        .edit-profile-section {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 25px;
+            margin-top: 30px;
+        }
+        
+        .edit-profile-section h3 {
+            color: #fff;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            color: #aaa;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 14px;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #4a90d9;
+        }
+        
+        .vip-only-notice {
+            color: #ffd700;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        .save-btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #4a90d9, #7c3aed);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .save-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(74, 144, 217, 0.4);
+        }
+        
+        .save-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -264,8 +461,26 @@
     
     <script>
         const profileId = window.location.pathname.split('/').pop();
+        let currentUser = null;
+        let isOwner = false;
+        
+        // Check if logged in user is viewing their own profile
+        async function checkAuth() {
+            try {
+                const res = await fetch('/api/auth/me');
+                const data = await res.json();
+                if (data.success && data.user) {
+                    currentUser = data.user;
+                    isOwner = data.user.profileId === profileId;
+                }
+            } catch (err) {
+                console.error('Auth check failed:', err);
+            }
+        }
         
         async function loadProfile() {
+            await checkAuth();
+            
             try {
                 const res = await fetch(`/api/profile/${profileId}`);
                 const data = await res.json();
@@ -299,17 +514,74 @@
             const minutes = Math.floor((stats.timePlayed % 3600) / 60);
             const timeString = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
             
+            // Badges
+            let badges = '';
+            if (profile.isAdmin) {
+                badges += '<span class="admin-badge admin-badge-large">Admin</span>';
+            }
+            if (profile.isVIP) {
+                badges += '<span class="vip-badge vip-badge-large">VIP</span>';
+            }
+            
+            // Avatar (photo or initials)
+            let avatarHtml = '';
+            if (profile.profilePhoto) {
+                const vipClass = profile.isVIP ? 'avatar-vip' : '';
+                avatarHtml = `<img src="${escapeHtml(profile.profilePhoto)}" alt="${escapeHtml(profile.username)}" class="avatar-photo ${vipClass}" onerror="this.outerHTML='<div class=\\'avatar\\'>${profile.username.substring(0, 2).toUpperCase()}</div>'">`;
+            } else {
+                avatarHtml = `<div class="avatar">${profile.username.substring(0, 2).toUpperCase()}</div>`;
+            }
+            
+            // Custom title for VIP
+            let titleHtml = '';
+            if (profile.isVIP && profile.profileTitle) {
+                titleHtml = `<div class="profile-title">${escapeHtml(profile.profileTitle)}</div>`;
+            }
+            
+            // Bio for VIP
+            let bioHtml = '';
+            if (profile.isVIP && profile.profileBio) {
+                bioHtml = `<div class="profile-bio">"${escapeHtml(profile.profileBio)}"</div>`;
+            }
+            
+            // Edit section (only for profile owner)
+            let editSection = '';
+            if (isOwner) {
+                const isVIP = currentUser.isVIP || currentUser.isAdmin;
+                editSection = `
+                    <div class="edit-profile-section">
+                        <h3>✏️ Edit Profile</h3>
+                        <div class="form-group">
+                            <label>Profile Photo URL</label>
+                            <input type="text" id="photoInput" placeholder="https://example.com/photo.jpg" value="${escapeHtml(profile.profilePhoto || '')}">
+                        </div>
+                        <div class="form-group">
+                            <label>Custom Title ${!isVIP ? '<span class="vip-only-notice">⭐ VIP Only</span>' : ''}</label>
+                            <input type="text" id="titleInput" placeholder="Your custom title" value="${escapeHtml(profile.profileTitle || '')}" ${!isVIP ? 'disabled' : ''} maxlength="30">
+                        </div>
+                        <div class="form-group">
+                            <label>Bio ${!isVIP ? '<span class="vip-only-notice">⭐ VIP Only</span>' : ''}</label>
+                            <textarea id="bioInput" placeholder="Tell others about yourself..." ${!isVIP ? 'disabled' : ''} maxlength="200">${escapeHtml(profile.profileBio || '')}</textarea>
+                        </div>
+                        <button class="save-btn" onclick="saveProfile()">Save Changes</button>
+                    </div>
+                `;
+            }
+            
             document.getElementById('content').innerHTML = `
                 <div class="profile-card">
                     <div class="profile-header">
-                        <div class="avatar">${profile.username.substring(0, 2).toUpperCase()}</div>
+                        ${avatarHtml}
                         <div class="profile-info">
-                            <h2>${profile.username}</h2>
+                            <h2>${escapeHtml(profile.username)}${badges}</h2>
+                            ${titleHtml}
                             <p>Member since ${memberDate}</p>
                             <div class="profile-id">ID: ${profile.profileId}</div>
                         </div>
                         <button class="share-btn" onclick="shareProfile()">📤 Share Profile</button>
                     </div>
+                    
+                    ${bioHtml}
                     
                     <div class="stats-grid">
                         <div class="stat-card">
@@ -390,11 +662,46 @@
                             </div>
                         </div>
                     </div>
+                    
+                    ${editSection}
                 </div>
             `;
             
             // Update page title
             document.title = `${profile.username}'s Profile - Block Battle Arena`;
+        }
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        async function saveProfile() {
+            const photo = document.getElementById('photoInput')?.value || '';
+            const title = document.getElementById('titleInput')?.value || '';
+            const bio = document.getElementById('bioInput')?.value || '';
+            
+            try {
+                const res = await fetch('/api/profile/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ photo, title, bio })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    alert('Profile updated successfully!');
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                console.error('Save failed:', err);
+                alert('Failed to save profile');
+            }
         }
         
         function renderNotFound() {

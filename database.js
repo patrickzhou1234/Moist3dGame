@@ -17,8 +17,12 @@ db.exec(`
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login DATETIME,
         is_admin INTEGER DEFAULT 0,
+        is_vip INTEGER DEFAULT 0,
         is_banned INTEGER DEFAULT 0,
-        ban_reason TEXT
+        ban_reason TEXT,
+        profile_photo TEXT,
+        profile_bio TEXT,
+        profile_title TEXT
     );
 
     -- User sessions / login history
@@ -88,6 +92,23 @@ db.exec(`
     );
 `);
 
+// Migration: Add VIP columns if they don't exist (for existing databases)
+try {
+    db.exec(`ALTER TABLE users ADD COLUMN is_vip INTEGER DEFAULT 0`);
+} catch (e) { /* Column already exists */ }
+
+try {
+    db.exec(`ALTER TABLE users ADD COLUMN profile_photo TEXT`);
+} catch (e) { /* Column already exists */ }
+
+try {
+    db.exec(`ALTER TABLE users ADD COLUMN profile_bio TEXT`);
+} catch (e) { /* Column already exists */ }
+
+try {
+    db.exec(`ALTER TABLE users ADD COLUMN profile_title TEXT`);
+} catch (e) { /* Column already exists */ }
+
 // Prepared statements for common operations
 const statements = {
     // User operations
@@ -129,8 +150,21 @@ const statements = {
     `),
     
     getAllUsers: db.prepare(`
-        SELECT id, username, email, profile_id, created_at, last_login, is_admin, is_banned, ban_reason
+        SELECT id, username, email, profile_id, created_at, last_login, is_admin, is_vip, is_banned, ban_reason, profile_photo, profile_bio, profile_title
         FROM users ORDER BY created_at DESC
+    `),
+    
+    setUserVIP: db.prepare(`
+        UPDATE users SET is_vip = ? WHERE id = ?
+    `),
+    
+    updateProfile: db.prepare(`
+        UPDATE users SET profile_photo = ?, profile_bio = ?, profile_title = ? WHERE id = ?
+    `),
+    
+    getFullUserByProfileId: db.prepare(`
+        SELECT id, username, email, profile_id, created_at, last_login, is_admin, is_vip, is_banned, profile_photo, profile_bio, profile_title
+        FROM users WHERE profile_id = ?
     `),
     
     // Login history
@@ -173,7 +207,7 @@ const statements = {
     `),
     
     getStatsByProfileId: db.prepare(`
-        SELECT ps.*, u.username, u.profile_id, u.created_at as member_since
+        SELECT ps.*, u.username, u.profile_id, u.created_at as member_since, u.is_admin, u.is_vip, u.profile_photo, u.profile_bio, u.profile_title
         FROM player_stats ps
         JOIN users u ON ps.user_id = u.id
         WHERE u.profile_id = ?
@@ -232,7 +266,7 @@ const statements = {
     
     // Leaderboard
     getLeaderboard: db.prepare(`
-        SELECT ps.*, u.username, u.profile_id, u.is_admin,
+        SELECT ps.*, u.username, u.profile_id, u.is_admin, u.is_vip, u.profile_photo, u.profile_bio, u.profile_title,
             CASE WHEN ps.deaths > 0 THEN ROUND(CAST(ps.kills AS FLOAT) / ps.deaths, 2) ELSE ps.kills END as kdr
         FROM player_stats ps
         JOIN users u ON ps.user_id = u.id
@@ -349,7 +383,11 @@ module.exports = {
                 username: user.username,
                 email: user.email,
                 profileId: user.profile_id,
-                isAdmin: user.is_admin === 1
+                isAdmin: user.is_admin === 1,
+                isVIP: user.is_vip === 1,
+                profilePhoto: user.profile_photo,
+                profileBio: user.profile_bio,
+                profileTitle: user.profile_title
             }
         };
     },
@@ -413,6 +451,36 @@ module.exports = {
     
     setUserAdmin(userId, isAdmin) {
         statements.setUserAdmin.run(isAdmin ? 1 : 0, userId);
+    },
+    
+    setUserAdminByUsername(username, isAdmin) {
+        const user = this.statements.getUserByUsername.get(username);
+        if (user) {
+            this.statements.setUserAdmin.run(isAdmin ? 1 : 0, user.id);
+            return true;
+        }
+        return false;
+    },
+    
+    setUserVIP(userId, isVIP) {
+        statements.setUserVIP.run(isVIP ? 1 : 0, userId);
+    },
+    
+    setUserVIPByUsername(username, isVIP) {
+        const user = this.statements.getUserByUsername.get(username);
+        if (user) {
+            this.statements.setUserVIP.run(isVIP ? 1 : 0, user.id);
+            return true;
+        }
+        return false;
+    },
+    
+    updateProfile(userId, photo, bio, title) {
+        statements.updateProfile.run(photo, bio, title, userId);
+    },
+    
+    getFullUserByProfileId(profileId) {
+        return statements.getFullUserByProfileId.get(profileId);
     },
     
     // Admin session management

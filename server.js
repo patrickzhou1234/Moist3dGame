@@ -146,6 +146,11 @@ app.get('/api/profile/:profileId', (req, res) => {
                 username: profile.username,
                 profileId: profile.profile_id,
                 memberSince: profile.member_since,
+                isAdmin: profile.is_admin === 1,
+                isVIP: profile.is_vip === 1,
+                profilePhoto: profile.profile_photo,
+                profileBio: profile.profile_bio,
+                profileTitle: profile.profile_title,
                 stats: {
                     kills: profile.kills,
                     deaths: profile.deaths,
@@ -185,9 +190,67 @@ app.get('/api/leaderboard', (req, res) => {
             deaths: entry.deaths,
             kdr: entry.kdr,
             gamesPlayed: entry.games_played,
-            isAdmin: entry.is_admin === 1
+            isAdmin: entry.is_admin === 1,
+            isVIP: entry.is_vip === 1,
+            profilePhoto: entry.profile_photo,
+            profileBio: entry.profile_bio,
+            profileTitle: entry.profile_title
         }))
     });
+});
+
+// API: Update profile (VIP only features)
+app.post('/api/profile/update', (req, res) => {
+    if (!req.session.user) {
+        return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+    
+    const user = db.getUserById(req.session.user.id);
+    if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    // VIP users can update bio, title, and photo
+    // Regular users can only update photo
+    const { photo, bio, title } = req.body;
+    
+    // Validate photo URL if provided
+    if (photo && photo.length > 500) {
+        return res.status(400).json({ success: false, error: 'Photo URL too long' });
+    }
+    
+    // Only VIP users can set bio and title
+    const isVIP = user.is_vip === 1 || user.is_admin === 1;
+    
+    if (!isVIP && (bio || title)) {
+        return res.status(403).json({ success: false, error: 'VIP membership required for bio and title customization' });
+    }
+    
+    // Validate bio and title length
+    if (bio && bio.length > 200) {
+        return res.status(400).json({ success: false, error: 'Bio must be under 200 characters' });
+    }
+    
+    if (title && title.length > 30) {
+        return res.status(400).json({ success: false, error: 'Title must be under 30 characters' });
+    }
+    
+    // Update profile
+    db.updateProfile(
+        user.id,
+        photo || user.profile_photo,
+        isVIP ? (bio !== undefined ? bio : user.profile_bio) : user.profile_bio,
+        isVIP ? (title !== undefined ? title : user.profile_title) : user.profile_title
+    );
+    
+    // Update session
+    req.session.user.profilePhoto = photo || user.profile_photo;
+    if (isVIP) {
+        req.session.user.profileBio = bio !== undefined ? bio : user.profile_bio;
+        req.session.user.profileTitle = title !== undefined ? title : user.profile_title;
+    }
+    
+    res.json({ success: true });
 });
 
 // ============ ADMIN ROUTES ============
@@ -337,6 +400,13 @@ app.post('/api/admin/users/:userId/unban', requireAdmin, (req, res) => {
 app.post('/api/admin/users/:userId/admin', requireAdmin, (req, res) => {
     const { isAdmin } = req.body;
     db.setUserAdmin(parseInt(req.params.userId), isAdmin);
+    res.json({ success: true });
+});
+
+// API: Set VIP status (admin)
+app.post('/api/admin/users/:userId/vip', requireAdmin, (req, res) => {
+    const { isVIP } = req.body;
+    db.setUserVIP(parseInt(req.params.userId), isVIP);
     res.json({ success: true });
 });
 

@@ -199,6 +199,142 @@
             100% { background-position: 400% 50%; }
         }
         
+        /* VIP Badge with sparkle effect */
+        .vip-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-left: 8px;
+            background: linear-gradient(135deg, #ffd700, #ff8c00, #ffd700);
+            background-size: 200% 200%;
+            animation: vip-shimmer 2s ease-in-out infinite;
+            color: #000;
+            text-shadow: 0 0 2px rgba(255,255,255,0.5);
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.5), 0 0 30px rgba(255, 140, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .vip-badge::before {
+            content: '✨';
+            position: absolute;
+            left: -20px;
+            animation: vip-sparkle 2s ease-in-out infinite;
+        }
+        
+        .vip-badge::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(
+                to right,
+                transparent 0%,
+                rgba(255, 255, 255, 0.4) 50%,
+                transparent 100%
+            );
+            transform: rotate(30deg);
+            animation: vip-shine 3s ease-in-out infinite;
+        }
+        
+        @keyframes vip-shimmer {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+        
+        @keyframes vip-sparkle {
+            0%, 100% { opacity: 0; transform: translateX(0) scale(0.5); }
+            50% { opacity: 1; transform: translateX(30px) scale(1); }
+        }
+        
+        @keyframes vip-shine {
+            0% { left: -100%; }
+            20%, 100% { left: 100%; }
+        }
+        
+        .vip-badge-large {
+            padding: 4px 12px;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        /* VIP custom title in leaderboard */
+        .player-title {
+            color: #ffd700;
+            font-size: 11px;
+            font-style: italic;
+            margin-top: 2px;
+        }
+        
+        /* VIP bio tooltip */
+        .player-bio-tooltip {
+            position: relative;
+        }
+        
+        .player-bio-tooltip::after {
+            content: attr(data-bio);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #e0e0e0;
+            white-space: nowrap;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
+        .player-bio-tooltip:hover::after {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        /* Player avatar with photo */
+        .player-avatar-img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+        
+        .player-avatar-vip {
+            border: 2px solid #ffd700;
+            box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+        }
+        
+        .top-player .avatar-img {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+        
+        .top-player.first .avatar-img {
+            width: 80px;
+            height: 80px;
+        }
+        
+        .avatar-img-vip {
+            border: 3px solid #ffd700;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.5);
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px;
@@ -332,6 +468,33 @@
     </div>
     
     <script>
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function getAvatarHtml(player, size = 'normal') {
+            if (player.profilePhoto) {
+                const vipClass = player.isVIP ? (size === 'large' ? 'avatar-img-vip' : 'player-avatar-vip') : '';
+                const sizeClass = size === 'large' ? 'avatar-img' : 'player-avatar-img';
+                return `<img src="${escapeHtml(player.profilePhoto)}" alt="${escapeHtml(player.username)}" class="${sizeClass} ${vipClass}" onerror="this.outerHTML='<div class=\\'${size === 'large' ? 'avatar' : 'player-avatar'}\\'>${player.username.substring(0, 2).toUpperCase()}</div>'">`;
+            }
+            return `<div class="${size === 'large' ? 'avatar' : 'player-avatar'}">${player.username.substring(0, 2).toUpperCase()}</div>`;
+        }
+        
+        function getBadges(player, large = false) {
+            let badges = '';
+            if (player.isAdmin) {
+                badges += `<span class="admin-badge${large ? ' admin-badge-large' : ''}">Admin</span>`;
+            }
+            if (player.isVIP) {
+                badges += `<span class="vip-badge${large ? ' vip-badge-large' : ''}">VIP</span>`;
+            }
+            return badges;
+        }
+        
         async function loadLeaderboard() {
             try {
                 const res = await fetch('/api/leaderboard?limit=100');
@@ -356,25 +519,28 @@
                     <div class="top-3">
                         <div class="top-player" onclick="viewProfile('${top3[1].profileId}')">
                             <div class="medal">🥈</div>
-                            <div class="avatar">${top3[1].username.substring(0, 2).toUpperCase()}</div>
-                            <div class="name">${top3[1].username}</div>
-                            ${top3[1].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
+                            ${getAvatarHtml(top3[1], 'large')}
+                            <div class="name">${escapeHtml(top3[1].username)}</div>
+                            ${getBadges(top3[1], true)}
+                            ${top3[1].isVIP && top3[1].profileTitle ? `<div class="player-title">${escapeHtml(top3[1].profileTitle)}</div>` : ''}
                             <div class="kills">${top3[1].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
                         <div class="top-player first" onclick="viewProfile('${top3[0].profileId}')">
                             <div class="medal">🥇</div>
-                            <div class="avatar">${top3[0].username.substring(0, 2).toUpperCase()}</div>
-                            <div class="name">${top3[0].username}</div>
-                            ${top3[0].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
+                            ${getAvatarHtml(top3[0], 'large')}
+                            <div class="name">${escapeHtml(top3[0].username)}</div>
+                            ${getBadges(top3[0], true)}
+                            ${top3[0].isVIP && top3[0].profileTitle ? `<div class="player-title">${escapeHtml(top3[0].profileTitle)}</div>` : ''}
                             <div class="kills">${top3[0].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
                         <div class="top-player" onclick="viewProfile('${top3[2].profileId}')">
                             <div class="medal">🥉</div>
-                            <div class="avatar">${top3[2].username.substring(0, 2).toUpperCase()}</div>
-                            <div class="name">${top3[2].username}</div>
-                            ${top3[2].isAdmin ? '<span class="admin-badge admin-badge-large">Admin</span>' : ''}
+                            ${getAvatarHtml(top3[2], 'large')}
+                            <div class="name">${escapeHtml(top3[2].username)}</div>
+                            ${getBadges(top3[2], true)}
+                            ${top3[2].isVIP && top3[2].profileTitle ? `<div class="player-title">${escapeHtml(top3[2].profileTitle)}</div>` : ''}
                             <div class="kills">${top3[2].kills}</div>
                             <div class="kills-label">kills</div>
                         </div>
@@ -393,15 +559,18 @@
                 if (player.kdr >= 1.5) kdrClass = 'kdr-positive';
                 else if (player.kdr < 1) kdrClass = 'kdr-negative';
                 
-                const adminBadge = player.isAdmin ? '<span class="admin-badge">Admin</span>' : '';
+                const bioTooltip = player.isVIP && player.profileBio ? `class="player-bio-tooltip" data-bio="${escapeHtml(player.profileBio)}"` : '';
                 
                 return `
                     <tr onclick="viewProfile('${player.profileId}')" style="cursor:pointer;">
                         <td class="rank ${rankClass}">#${player.rank}</td>
                         <td>
-                            <div class="player-cell">
-                                <div class="player-avatar">${player.username.substring(0, 2).toUpperCase()}</div>
-                                <div class="player-name">${player.username}${adminBadge}</div>
+                            <div class="player-cell" ${bioTooltip}>
+                                ${getAvatarHtml(player)}
+                                <div>
+                                    <div class="player-name">${escapeHtml(player.username)}${getBadges(player)}</div>
+                                    ${player.isVIP && player.profileTitle ? `<div class="player-title">${escapeHtml(player.profileTitle)}</div>` : ''}
+                                </div>
                             </div>
                         </td>
                         <td class="stat-cell">${player.kills}</td>
