@@ -3362,36 +3362,47 @@ function addChatMessage(data) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'chat-message';
 
-    // Create badges based on roles
-    let badgeHtml = '';
-    if (data.isAdmin) {
-        badgeHtml = '<span class="chat-badge badge-admin">Admin</span>';
-    } else if (data.isVIP) {
-        badgeHtml = '<span class="chat-badge badge-vip">VIP</span>';
-    }
-
-    // Add profile title if it exists
-    if (data.profileTitle) {
-        badgeHtml += `<span class="chat-badge" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #ccc;">${data.profileTitle}</span>`;
-    }
-
-    // Profile picture (always show, fallback to default if missing)
-    const profilePicUrl = data.profilePicUrl || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(data.username || 'Player') + '&background=4a90d9&color=fff&size=128';
-    const profilePicHtml = `<img src="${profilePicUrl}" alt="Profile" style="width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid #4a90d9;" onerror="this.src='https://ui-avatars.com/api/?name=User&background=4a90d9&color=fff&size=128'">`;
-
-    // Set message content with sanitized HTML for badges, profile pic, and username
-    messageDiv.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 8px;">
-            ${profilePicHtml}
-            <div style="display: flex; flex-direction: column;">
-                <div style="display: flex; align-items: center; gap: 5px;">
-                    ${badgeHtml}
-                    <span class="chat-username" style="color: ${data.isAdmin ? '#ff3333' : (data.isVIP ? '#ffd700' : '#4a90d9')}">${data.username}:</span>
-                </div>
-                <span class="chat-text" style="flex: 1; word-break: break-all;">${data.message}</span>
+    // Handle system messages (death notifications)
+    if (data.isSystem) {
+        messageDiv.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: rgba(231, 76, 60, 0.2); border-left: 3px solid #e74c3c; border-radius: 4px;">
+                <span style="font-size: 18px;">💀</span>
+                <span style="color: #ecf0f1; font-weight: 500;">${data.message}</span>
             </div>
-        </div>
-    `;
+        `;
+    } else {
+        // Regular user messages
+        // Create badges based on roles
+        let badgeHtml = '';
+        if (data.isAdmin) {
+            badgeHtml = '<span class="chat-badge badge-admin">Admin</span>';
+        } else if (data.isVIP) {
+            badgeHtml = '<span class="chat-badge badge-vip">VIP</span>';
+        }
+
+        // Add profile title if it exists
+        if (data.profileTitle) {
+            badgeHtml += `<span class="chat-badge" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #ccc;">${data.profileTitle}</span>`;
+        }
+
+        // Profile picture (always show, fallback to default if missing)
+        const profilePicUrl = data.profilePicUrl || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(data.username || 'Player') + '&background=4a90d9&color=fff&size=128';
+        const profilePicHtml = `<img src="${profilePicUrl}" alt="Profile" style="width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid #4a90d9;" onerror="this.src='https://ui-avatars.com/api/?name=User&background=4a90d9&color=fff&size=128'">`;
+
+        // Set message content with sanitized HTML for badges, profile pic, and username
+        messageDiv.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+                ${profilePicHtml}
+                <div style="display: flex; flex-direction: column;">
+                    <div style="display: flex; align-items: center; gap: 5px;">
+                        ${badgeHtml}
+                        <span class="chat-username" style="color: ${data.isAdmin ? '#ff3333' : (data.isVIP ? '#ffd700' : '#4a90d9')}">${data.username}:</span>
+                    </div>
+                    <span class="chat-text" style="flex: 1; word-break: break-all;">${data.message}</span>
+                </div>
+            </div>
+        `;
+    }
 
     chatMessages.appendChild(messageDiv);
 

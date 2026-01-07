@@ -894,6 +894,32 @@ io.on('connection', (socket) => {
                     victimId: socket.id,
                     victimName: victim.username
                 });
+                
+                // Send system message to chat about the kill
+                const weaponName = {
+                    'ball': 'Ball',
+                    'ultimate': 'Ultimate Ball',
+                    'grenade': 'Grenade',
+                    'bat': 'Katana',
+                    'drone': 'Drone Bomb',
+                    'mine': 'Mine',
+                    'knockback': 'Knockback'
+                }[cause] || cause;
+                
+                io.to(roomId).emit('chatMessage', {
+                    isSystem: true,
+                    message: `${victim.username} was killed by ${killer.username} with ${weaponName}`
+                });
+            } else {
+                // Death without killer (fall, suicide, etc.)
+                const deathMessage = cause === 'fall' ? `${victim.username} fell to their death` :
+                                    cause === 'ceiling' ? `${victim.username} flew too high` :
+                                    `${victim.username} died`;
+                
+                io.to(roomId).emit('chatMessage', {
+                    isSystem: true,
+                    message: deathMessage
+                });
             }
         }
     });
