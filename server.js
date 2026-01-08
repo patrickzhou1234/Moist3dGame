@@ -1086,15 +1086,85 @@ io.on('connection', (socket) => {
     });
 
     socket.on('adminDeleteRoom', (roomId) => {
-        if (!adminSockets.has(socket)) return;
+        console.log('adminDeleteRoom received, roomId:', roomId);
+        console.log('Is admin socket:', adminSockets.has(socket));
+        
+        if (!adminSockets.has(socket)) {
+            console.log('Rejected: socket not in adminSockets');
+            return;
+        }
         
         if (roomId === 'default') {
+            console.log('Rejected: cannot delete default room');
             return; // Can't delete default room
         }
         const index = rooms.findIndex(r => r.id === roomId);
+        console.log('Room index found:', index);
+        
         if (index > -1) {
-            const roomName = rooms[index].name;
+            const room = rooms[index];
+            const roomName = room.name;
+            const defaultRoom = rooms.find(r => r.id === 'default');
+            
+            // Move all players in this room to the default room
+            Object.keys(room.players).forEach(socketId => {
+                const playerSocket = io.sockets.sockets.get(socketId);
+                const player = players[socketId];
+                
+                if (playerSocket && player) {
+                    // Leave the old room
+                    playerSocket.leave(roomId);
+                    
+                    // Remove from old room
+                    delete room.players[socketId];
+                    
+                    // Add to default room
+                    player.roomId = 'default';
+                    defaultRoom.players[socketId] = player;
+                    
+                    // Join the default room
+                    playerSocket.join('default');
+                    
+                    // Notify the player they've been moved
+                    playerSocket.emit('roomDeleted', {
+                        message: `Room "${roomName}" was deleted. You have been moved to the Default Arena.`,
+                        newRoomId: 'default',
+                        newRoomName: 'Default Arena'
+                    });
+                    
+                    // Send room settings for the new room
+                    playerSocket.emit('roomSettings', {
+                        roomId: 'default',
+                        roomName: 'Default Arena',
+                        hardcoreMode: defaultRoom.hardcoreMode || false
+                    });
+                    
+                    // Send current players in the default room
+                    const roomPlayers = {};
+                    Object.keys(defaultRoom.players).forEach(id => {
+                        if (players[id]) {
+                            roomPlayers[id] = {
+                                ...players[id],
+                                profileId: players[id].profileId
+                            };
+                        }
+                    });
+                    playerSocket.emit('currentPlayers', roomPlayers);
+                    
+                    // Send blocks in the default room
+                    playerSocket.emit('currentBlocks', defaultRoom.blocks);
+                    
+                    // Notify other players in the default room about this player
+                    playerSocket.to('default').emit('newPlayer', {
+                        ...player,
+                        profileId: player.profileId
+                    });
+                }
+            });
+            
+            // Remove the room
             rooms.splice(index, 1);
+            
             broadcastToAdmins('adminData', getAdminData());
             broadcastToAdmins('adminLog', { type: 'action', message: `Room "${roomName}" deleted` });
         }
@@ -1119,6 +1189,32 @@ io.on('connection', (socket) => {
                 type: 'action', 
                 message: `Room "${room.name}" hardcore mode ${room.hardcoreMode ? 'ENABLED' : 'DISABLED'}` 
             });
+        }
+    });
+
+    socket.on('adminGetRoomDetails', (roomId) => {
+        if (!adminSockets.has(socket)) return;
+        
+        const room = rooms.find(r => r.id === roomId);
+        if (room) {
+            socket.emit('adminRoomDetails', {
+                id: room.id,
+                name: room.name,
+                maxPlayers: room.maxPlayers,
+                type: room.type,
+                code: room.code,
+                hardcoreMode: room.hardcoreMode || false,
+                playerCount: Object.keys(room.players).length,
+                blockCount: room.blocks.length,
+                players: Object.values(room.players).map(p => ({
+                    id: p.id,
+                    username: p.username,
+                    profileId: p.profileId,
+                    ip: p.ip
+                }))
+            });
+        } else {
+            socket.emit('adminRoomDetails', null);
         }
     });
 

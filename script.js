@@ -515,6 +515,19 @@ socket.on('joinRoomError', (data) => {
     hasJoined = false;
 });
 
+socket.on('roomDeleted', (data) => {
+    Swal.fire({
+        icon: 'info',
+        title: 'Room Deleted',
+        text: data.message,
+        confirmButtonColor: '#4a90d9',
+        timer: 5000,
+        timerProgressBar: true
+    });
+    // Update current room display if applicable
+    console.log('Moved to room:', data.newRoomName);
+});
+
 socket.on('disconnect', () => {
     console.log('Socket disconnected!');
 });

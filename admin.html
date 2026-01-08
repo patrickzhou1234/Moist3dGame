@@ -676,6 +676,10 @@
             window.location.href = '/admin/login';
         });
         
+        // Track last rooms data to avoid unnecessary re-renders
+        let lastRoomsJson = '';
+        let lastPlayersJson = '';
+        
         // Receive admin data
         socket.on('adminData', (data) => {
             document.getElementById('totalPlayers').textContent = data.playerCount;
@@ -685,8 +689,19 @@
             document.getElementById('totalKills').textContent = data.totalKills || 0;
             serverStartTime = data.serverStartTime;
             
-            renderRooms(data.rooms);
-            renderPlayers(data.players);
+            // Only re-render rooms if data changed
+            const roomsJson = JSON.stringify(data.rooms);
+            if (roomsJson !== lastRoomsJson) {
+                lastRoomsJson = roomsJson;
+                renderRooms(data.rooms);
+            }
+            
+            // Only re-render players if data changed
+            const playersJson = JSON.stringify(data.players);
+            if (playersJson !== lastPlayersJson) {
+                lastPlayersJson = playersJson;
+                renderPlayers(data.players);
+            }
         });
         
         socket.on('adminLog', (log) => {
@@ -704,27 +719,37 @@
                     }
                     throw new Error('Failed to load users');
                 }
-                allUsers = await response.json();
+                const data = await response.json();
+                if (data.success && data.users) {
+                    allUsers = data.users;
+                } else {
+                    allUsers = [];
+                }
                 renderUsers(allUsers);
             } catch (error) {
                 console.error('Error loading users:', error);
+                allUsers = [];
+                renderUsers(allUsers);
             }
         }
         
         function filterUsers() {
             const search = document.getElementById('userSearch').value.toLowerCase();
-            const filtered = allUsers.filter(user => 
-                user.username.toLowerCase().includes(search) || 
-                user.email.toLowerCase().includes(search) ||
-                (user.ips && user.ips.some(ip => ip.includes(search)))
-            );
+            const filtered = allUsers.filter(user => {
+                const username = (user.username || '').toLowerCase();
+                const email = (user.email || '').toLowerCase();
+                const matchesUsername = username.includes(search);
+                const matchesEmail = email.includes(search);
+                const matchesIP = user.ips && user.ips.some(ip => (ip || '').toLowerCase().includes(search));
+                return matchesUsername || matchesEmail || matchesIP;
+            });
             renderUsers(filtered);
         }
         
         function renderUsers(users) {
             const tbody = document.getElementById('usersTableBody');
             
-            if (users.length === 0) {
+            if (!users || users.length === 0) {
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="9" class="empty-state">
@@ -737,30 +762,36 @@
             }
             
             tbody.innerHTML = users.map(user => {
-                const kdr = user.deaths > 0 ? (user.kills / user.deaths).toFixed(2) : user.kills.toFixed(2);
-                const ips = user.ips ? user.ips.map(ip => `<span class="ip-tag" onclick="copyToClipboard('${ip}')">${ip}</span>`).join('') : 'N/A';
+                // Extract stats from user.stats if available, otherwise use user directly
+                const stats = user.stats || user;
+                const kills = stats.kills || 0;
+                const deaths = stats.deaths || 0;
+                const gamesPlayed = stats.games_played || 0;
+                const kdr = deaths > 0 ? (kills / deaths).toFixed(2) : kills.toFixed(2);
+                const ips = user.ips && user.ips.length > 0 ? user.ips.map(ip => `<span class="ip-tag" onclick="copyToClipboard('${ip}')">${ip}</span>`).join('') : 'N/A';
                 
                 return `
                     <tr>
                         <td>
                             <div style="display: flex; align-items: center; gap: 10px;">
-                                <div class="user-avatar">${user.username.substring(0, 2).toUpperCase()}</div>
+                                <div class="user-avatar">${(user.username || '').substring(0, 2).toUpperCase()}</div>
                                 <div>
-                                    <div style="font-weight: 500;">${user.username}</div>
+                                    <div style="font-weight: 500;">${user.username || 'Unknown'}</div>
                                     ${user.is_admin ? '<span class="badge badge-admin">Admin</span>' : ''}
+                                    ${user.is_vip ? '<span class="badge" style="background: rgba(255, 193, 7, 0.2); color: #ffc107;">VIP</span>' : ''}
                                     ${user.is_banned ? '<span class="badge badge-banned">Banned</span>' : ''}
                                 </div>
                             </div>
                         </td>
-                        <td><code style="font-size: 11px;">${user.profile_id}</code></td>
-                        <td>${user.email}</td>
-                        <td>${user.kills} / ${user.deaths} / ${kdr}</td>
-                        <td>${user.games_played}</td>
+                        <td><code style="font-size: 11px;">${user.profile_id || 'N/A'}</code></td>
+                        <td>${user.email || 'N/A'}</td>
+                        <td>${kills} / ${deaths} / ${kdr}</td>
+                        <td>${gamesPlayed}</td>
                         <td>${ips}</td>
                         <td>
                             ${user.is_online ? '<span class="badge badge-online">Online</span>' : '<span style="color: #666;">Offline</span>'}
                         </td>
-                        <td>${new Date(user.created_at).toLocaleDateString()}</td>
+                        <td>${user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'}</td>
                         <td>
                             <button class="mui-btn mui-btn--small" onclick="viewUserProfile('${user.profile_id}')">View</button>
                             ${user.is_banned 
@@ -779,8 +810,9 @@
         
         function renderRooms(rooms) {
             const container = document.getElementById('roomsContainer');
+            console.log('renderRooms called with', rooms.length, 'rooms');
             
-            if (rooms.length === 0) {
+            if (!rooms || rooms.length === 0) {
                 container.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">🏠</div>
@@ -790,13 +822,13 @@
                 return;
             }
             
-            container.innerHTML = rooms.map(room => `
-                <div class="room-card">
+            container.innerHTML = rooms.map(room => {
+                const roomId = room.id;
+                return `
+                <div class="room-card" data-room-id="${roomId}">
                     <div class="room-header">
                         <span class="room-name">${room.name}</span>
-                        <span class="room-status ${room.playerCount > 0 ? 'active' : 'empty'}">
-                            ${room.playerCount > 0 ? 'Active' : 'Empty'}
-                        </span>
+                        <span class="room-status ${room.playerCount > 0 ? 'active' : 'empty'}">${room.playerCount > 0 ? 'Active' : 'Empty'}</span>
                     </div>
                     <div class="room-info">
                         <span>👥 ${room.playerCount}/${room.maxPlayers}</span>
@@ -816,14 +848,14 @@
                         </div>
                     ` : ''}
                     <div class="room-actions">
-                        <button class="mui-btn mui-btn--small" onclick="viewRoom('${room.id}')">View</button>
-                        <button class="mui-btn mui-btn--small" style="background:${room.hardcoreMode ? '#e53935' : '#ff9800'};" onclick="toggleHardcore('${room.id}')">
+                        <button class="mui-btn mui-btn--small" onclick="viewRoom('${roomId}')">View</button>
+                        <button class="mui-btn mui-btn--small" style="background:${room.hardcoreMode ? '#e53935' : '#ff9800'};" onclick="toggleHardcore('${roomId}')">
                             ${room.hardcoreMode ? '☠️ Hardcore ON' : '🛡️ Normal'}
                         </button>
-                        <button class="mui-btn mui-btn--danger mui-btn--small" onclick="deleteRoom('${room.id}')">Delete</button>
+                        <button class="mui-btn mui-btn--danger mui-btn--small" onclick="deleteRoom('${roomId}')">Delete</button>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
         
         function renderPlayers(players) {
@@ -882,13 +914,24 @@
         }
         
         function toggleHardcore(roomId) {
+            console.log('Toggle hardcore for room:', roomId);
             socket.emit('adminToggleHardcore', roomId);
         }
         
         function deleteRoom(roomId) {
+            if (roomId === 'default') {
+                Swal.fire({
+                    title: 'Cannot Delete',
+                    text: 'The default room cannot be deleted.',
+                    icon: 'warning',
+                    confirmButtonColor: '#4a90d9'
+                });
+                return;
+            }
+            
             Swal.fire({
                 title: 'Delete Room?',
-                text: 'Are you sure you want to delete this room?',
+                text: 'Are you sure you want to delete this room? All players will be kicked.',
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#e53935',
@@ -896,19 +939,67 @@
                 confirmButtonText: 'Yes, delete it!'
             }).then((result) => {
                 if (result.isConfirmed) {
+                    console.log('Emitting adminDeleteRoom for:', roomId);
                     socket.emit('adminDeleteRoom', roomId);
                 }
             });
         }
         
         function viewRoom(roomId) {
-            Swal.fire({
-                title: 'Room Details',
-                text: 'Room ID: ' + roomId,
-                icon: 'info',
-                confirmButtonColor: '#4a90d9'
-            });
+            // Request updated room data from server
+            socket.emit('adminGetRoomDetails', roomId);
         }
+        
+        // Handle room details response
+        socket.on('adminRoomDetails', (room) => {
+            if (!room) {
+                Swal.fire({
+                    title: 'Room Not Found',
+                    text: 'The room could not be found.',
+                    icon: 'error',
+                    confirmButtonColor: '#e53935'
+                });
+                return;
+            }
+            
+            const playersList = room.players && room.players.length > 0 
+                ? room.players.map(p => `<li style="margin: 5px 0;">${p.username} (${p.profileId || p.id.substring(0, 8)})</li>`).join('')
+                : '<li style="color: #888;">No players currently in this room</li>';
+            
+            Swal.fire({
+                title: `🏠 ${room.name}`,
+                html: `
+                    <div style="text-align: left; padding: 10px;">
+                        <p><strong>Room ID:</strong> <code style="background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px;">${room.id}</code></p>
+                        <p><strong>Type:</strong> ${room.type === 'private' ? '🔒 Private' : '🌐 Public'}</p>
+                        ${room.code ? `<p><strong>Room Code:</strong> <code style="background: rgba(156,39,176,0.2); color: #bb86fc; padding: 2px 6px; border-radius: 4px;">${room.code}</code></p>` : ''}
+                        <p><strong>Mode:</strong> ${room.hardcoreMode ? '<span style="color: #e53935;">☠️ Hardcore (No Walls)</span>' : '🛡️ Normal'}</p>
+                        <p><strong>Players:</strong> ${room.playerCount}/${room.maxPlayers}</p>
+                        <p><strong>Blocks Placed:</strong> ${room.blockCount}</p>
+                        <hr style="border-color: rgba(255,255,255,0.1); margin: 15px 0;">
+                        <p><strong>Players in Room:</strong></p>
+                        <ul style="list-style: none; padding-left: 10px;">${playersList}</ul>
+                    </div>
+                `,
+                icon: 'info',
+                confirmButtonColor: '#4a90d9',
+                showCancelButton: true,
+                cancelButtonText: 'Close',
+                confirmButtonText: 'Delete Room',
+                confirmButtonColor: '#e53935'
+            }).then((result) => {
+                if (result.isConfirmed && room.id !== 'default') {
+                    socket.emit('adminDeleteRoom', room.id);
+                } else if (result.isConfirmed && room.id === 'default') {
+                    Swal.fire({
+                        title: 'Cannot Delete',
+                        text: 'The default room cannot be deleted.',
+                        icon: 'warning',
+                        confirmButtonColor: '#4a90d9'
+                    });
+                }
+            });
+        });
         
         function viewUserProfile(profileId) {
             window.open('/profile/' + profileId, '_blank');
