@@ -4144,8 +4144,92 @@ clearBtn.onclick = function() {
     socket.emit('clearBlocks');
 }
 
+// Players overlay (Tab key) functionality
+const playersOverlay = document.getElementById('playersOverlay');
+const playersList = document.getElementById('playersList');
+const playersCount = document.getElementById('playersCount');
+
+function updatePlayersOverlay() {
+    if (!playersList) return;
+    
+    playersList.innerHTML = '';
+    
+    // Collect all players (self + others)
+    const allPlayers = [];
+    
+    // Add self
+    if (hasJoined && myUsername) {
+        allPlayers.push({
+            id: socket.id,
+            username: myUsername,
+            color: document.getElementById('colorpicker').value,
+            isYou: true
+        });
+    }
+    
+    // Add other players
+    for (const playerId in otherPlayers) {
+        const player = otherPlayers[playerId];
+        if (player && player.mesh) {
+            allPlayers.push({
+                id: playerId,
+                username: player.username || 'Player',
+                color: player.color || '#ffffff',
+                isYou: false
+            });
+        }
+    }
+    
+    // Sort alphabetically by username
+    allPlayers.sort((a, b) => a.username.localeCompare(b.username));
+    
+    // Create list items
+    allPlayers.forEach(player => {
+        const item = document.createElement('div');
+        item.className = 'player-list-item' + (player.isYou ? ' is-you' : '');
+        
+        const colorDot = document.createElement('div');
+        colorDot.className = 'player-color-dot';
+        colorDot.style.backgroundColor = player.color;
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'player-name';
+        nameSpan.textContent = player.username;
+        
+        item.appendChild(colorDot);
+        item.appendChild(nameSpan);
+        
+        if (player.isYou) {
+            const youTag = document.createElement('span');
+            youTag.className = 'player-you-tag';
+            youTag.textContent = 'YOU';
+            item.appendChild(youTag);
+        }
+        
+        playersList.appendChild(item);
+    });
+    
+    // Update count
+    playersCount.textContent = `${allPlayers.length} player${allPlayers.length !== 1 ? 's' : ''} in room`;
+}
+
+function showPlayersOverlay() {
+    updatePlayersOverlay();
+    playersOverlay.style.display = 'block';
+}
+
+function hidePlayersOverlay() {
+    playersOverlay.style.display = 'none';
+}
+
 // Key state tracking
 document.addEventListener('keydown', function(event) {
+    // Show players overlay on Tab
+    if (event.code === "Tab") {
+        event.preventDefault();
+        showPlayersOverlay();
+        return;
+    }
     if (document.activeElement === document.getElementById('chatInput')) {
         if (event.code === "Enter") {
             const chatInput = document.getElementById('chatInput');
@@ -4240,6 +4324,12 @@ document.addEventListener('keydown', function(event) {
 });
 
 document.addEventListener('keyup', function(event) {
+    // Hide players overlay when Tab is released
+    if (event.code === "Tab") {
+        hidePlayersOverlay();
+        return;
+    }
+    
     if (document.activeElement === document.getElementById('chatInput')) return;
     
     keysPressed[event.code] = false;
