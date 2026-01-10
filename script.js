@@ -623,12 +623,179 @@ let canDropBomb = true;
 
 // Preloaded 3D models
 const DRONE_MODEL_URL = "https://files.catbox.moe/z7hxt9.glb";
-const ULTIMATE_MODEL_URL = "https://files.catbox.moe/84ufxa.glb"; // TODO: Replace with actual ultimate model URL
-const BALL_MODEL_URL = "https://files.catbox.moe/5esvct.glb"; // TODO: Replace with actual ball model URL
-const KATANA_MODEL_URL = "https://files.catbox.moe/nlqntj.glb"; // TODO: Replace with actual katana model URL
-const DRONE_BOMB_MODEL_URL = "https://files.catbox.moe/qeyyrr.glb"; // TODO: Replace with actual drone bomb model URL
-const GRENADE_MODEL_URL = "https://files.catbox.moe/nmw7yv.glb"; // TODO: Replace with actual grenade model URL
-const MINE_MODEL_URL = "https://files.catbox.moe/qmnt2u.glb"; // TODO: Replace with actual mine model URL
+const ULTIMATE_MODEL_URL = "https://files.catbox.moe/84ufxa.glb";
+const BALL_MODEL_URL = "https://files.catbox.moe/5esvct.glb";
+const KATANA_MODEL_URL = "https://files.catbox.moe/nlqntj.glb";
+const DRONE_BOMB_MODEL_URL = "https://files.catbox.moe/qeyyrr.glb";
+const GRENADE_MODEL_URL = "https://files.catbox.moe/nmw7yv.glb";
+const MINE_MODEL_URL = "https://files.catbox.moe/qmnt2u.glb";
+
+// ============ ASSET CACHE SYSTEM (IndexedDB) ============
+// Caches 3D models locally so they don't need to be re-downloaded each visit
+
+const ASSET_CACHE_VERSION = 1; // Increment this to force re-download all assets
+const ASSET_DB_NAME = 'Moist3DGameAssets';
+const ASSET_STORE_NAME = 'models';
+
+// All models to cache
+const MODELS_TO_CACHE = [
+    { name: 'drone', url: DRONE_MODEL_URL },
+    { name: 'ultimate', url: ULTIMATE_MODEL_URL },
+    { name: 'ball', url: BALL_MODEL_URL },
+    { name: 'katana', url: KATANA_MODEL_URL },
+    { name: 'droneBomb', url: DRONE_BOMB_MODEL_URL },
+    { name: 'grenade', url: GRENADE_MODEL_URL },
+    { name: 'mine', url: MINE_MODEL_URL }
+];
+
+// Cached blob URLs for instant loading
+const cachedModelUrls = {};
+
+// Open IndexedDB connection
+function openAssetDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(ASSET_DB_NAME, ASSET_CACHE_VERSION);
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            // Clear old stores on version upgrade
+            if (db.objectStoreNames.contains(ASSET_STORE_NAME)) {
+                db.deleteObjectStore(ASSET_STORE_NAME);
+            }
+            db.createObjectStore(ASSET_STORE_NAME, { keyPath: 'name' });
+            console.log('[AssetCache] Database upgraded to version', ASSET_CACHE_VERSION);
+        };
+    });
+}
+
+// Get cached asset from IndexedDB
+async function getCachedAsset(db, name) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([ASSET_STORE_NAME], 'readonly');
+        const store = transaction.objectStore(ASSET_STORE_NAME);
+        const request = store.get(name);
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+    });
+}
+
+// Save asset to IndexedDB
+async function cacheAsset(db, name, url, blob) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([ASSET_STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(ASSET_STORE_NAME);
+        const request = store.put({ name, url, blob, cachedAt: Date.now() });
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve();
+    });
+}
+
+// Download and cache a single model
+async function downloadAndCacheModel(db, model, onProgress) {
+    try {
+        const response = await fetch(model.url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const blob = await response.blob();
+        await cacheAsset(db, model.name, model.url, blob);
+        
+        // Create blob URL - Babylon.js will auto-detect GLB from content
+        cachedModelUrls[model.name] = URL.createObjectURL(blob);
+        
+        console.log(`[AssetCache] Downloaded and cached: ${model.name}`);
+        
+        if (onProgress) onProgress(model.name, true);
+        return true;
+    } catch (error) {
+        console.error(`[AssetCache] Failed to cache ${model.name}:`, error);
+        // Fall back to original URL
+        cachedModelUrls[model.name] = model.url;
+        if (onProgress) onProgress(model.name, false);
+        return false;
+    }
+}
+
+// Initialize asset cache - call this before game starts
+async function initAssetCache(onProgress) {
+    try {
+        const db = await openAssetDB();
+        let loadedFromCache = 0;
+        let downloadedNew = 0;
+        
+        for (let i = 0; i < MODELS_TO_CACHE.length; i++) {
+            const model = MODELS_TO_CACHE[i];
+            
+            // Check if already cached
+            const cached = await getCachedAsset(db, model.name);
+            
+            if (cached && cached.blob && cached.url === model.url) {
+                // Load from cache - create blob URL
+                cachedModelUrls[model.name] = URL.createObjectURL(cached.blob);
+                
+                console.log(`[AssetCache] Loaded from cache: ${model.name}`);
+                loadedFromCache++;
+                if (onProgress) onProgress(model.name, true, i + 1, MODELS_TO_CACHE.length);
+            } else {
+                // Download and cache
+                await downloadAndCacheModel(db, model, (name, success) => {
+                    if (success) downloadedNew++;
+                    if (onProgress) onProgress(name, success, i + 1, MODELS_TO_CACHE.length);
+                });
+            }
+        }
+        
+        db.close();
+        console.log(`[AssetCache] Ready! ${loadedFromCache} from cache, ${downloadedNew} downloaded`);
+        return true;
+    } catch (error) {
+        console.error('[AssetCache] Failed to initialize:', error);
+        // Fall back to original URLs
+        MODELS_TO_CACHE.forEach(m => cachedModelUrls[m.name] = m.url);
+        return false;
+    }
+}
+
+// Get the cached URL for a model (use this instead of the original URL)
+function getCachedModelUrl(modelName) {
+    const cachedUrl = cachedModelUrls[modelName];
+    if (cachedUrl) {
+        return cachedUrl; // Blob URL or original URL as fallback
+    }
+    // Fallback to original URL
+    const model = MODELS_TO_CACHE.find(m => m.name === modelName);
+    return model ? model.url : null;
+}
+
+// Check if a URL is a cached blob URL
+function isCachedBlobUrl(url) {
+    return url && url.startsWith('blob:');
+}
+
+// Load a cached 3D model - handles blob URLs properly with plugin extension
+function loadCachedMesh(modelName, scene, onSuccess, onError) {
+    const url = getCachedModelUrl(modelName);
+    if (!url) {
+        if (onError) onError(null, 'Model not found: ' + modelName, null);
+        return;
+    }
+    
+    // For blob URLs, we need to specify the plugin extension
+    if (isCachedBlobUrl(url)) {
+        BABYLON.SceneLoader.ImportMesh("", url, "", scene, onSuccess, null, onError, ".glb");
+    } else {
+        BABYLON.SceneLoader.ImportMesh("", url, "", scene, onSuccess, null, onError);
+    }
+}
+
+// Helper to load a cached model into the scene (legacy)
+function loadCachedModel(modelName, scene, onSuccess, onError) {
+    loadCachedMesh(modelName, scene, onSuccess, onError);
+}
 
 // ============ HELPER FUNCTIONS ============
 
@@ -715,8 +882,8 @@ function createMineMesh(mineId, position) {
     
     mine.mineId = mineId;
     
-    // Load the mine 3D model
-    BABYLON.SceneLoader.ImportMesh("", MINE_MODEL_URL, "", scene, function(meshes) {
+    // Load the mine 3D model (from IndexedDB cache)
+    loadCachedMesh('mine', scene, function(meshes) {
         if (meshes.length > 0 && mine && !mine.isDisposed()) {
             const mineModel = new BABYLON.TransformNode("mineModel_" + mineId, scene);
             
@@ -1054,8 +1221,8 @@ var createScene = function () {
     batMesh.rotation.set(0, 0, 0);
     batMesh.visibility = 0; // Always invisible - katana model will be shown instead
     
-    // Load katana 3D model (cached from preload)
-    BABYLON.SceneLoader.ImportMesh("", KATANA_MODEL_URL, "", scene, function(meshes) {
+    // Load katana 3D model (from IndexedDB cache)
+    loadCachedMesh('katana', scene, function(meshes) {
         if (meshes.length > 0 && batMesh && !batMesh.isDisposed()) {
             const katanaModel = new BABYLON.TransformNode("katanaModel", scene);
             
@@ -1293,8 +1460,8 @@ var createScene = function () {
                 chargingBall = BABYLON.MeshBuilder.CreateSphere("chargingBall", {diameter: 1, segments: 8}, scene);
                 chargingBall.visibility = 0;
                 
-                // Load the 3D model (cached from preload, so loads instantly)
-                BABYLON.SceneLoader.ImportMesh("", ULTIMATE_MODEL_URL, "", scene, function(meshes) {
+                // Load the 3D model (from IndexedDB cache)
+                loadCachedMesh('ultimate', scene, function(meshes) {
                     if (meshes.length > 0 && chargingBall && !chargingBall.isDisposed()) {
                         const chargingModel = new BABYLON.TransformNode("chargingModel", scene);
                         
@@ -1361,8 +1528,8 @@ var createScene = function () {
                 grenadeChargingBall = BABYLON.MeshBuilder.CreateSphere("grenadeChargingBall", {diameter: ballSize * 2, segments: 16}, scene);
                 grenadeChargingBall.visibility = 0; // Make invisible, only show the 3D model
                 
-                // Load the grenade 3D model
-                BABYLON.SceneLoader.ImportMesh("", GRENADE_MODEL_URL, "", scene, function(meshes) {
+                // Load the grenade 3D model (from IndexedDB cache)
+                loadCachedMesh('grenade', scene, function(meshes) {
                     if (meshes.length > 0 && grenadeChargingBall && !grenadeChargingBall.isDisposed()) {
                         const grenadeModel = new BABYLON.TransformNode("grenadeChargingModel", scene);
                         
@@ -1746,8 +1913,8 @@ var createScene = function () {
         ultimateBall.position = startPos.clone();
         ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
         
-        // Load the external 3D model (cached from preload, so loads instantly)
-        BABYLON.SceneLoader.ImportMesh("", ULTIMATE_MODEL_URL, "", scene, function(meshes) {
+        // Load the external 3D model (from IndexedDB cache)
+        loadCachedMesh('ultimate', scene, function(meshes) {
             if (meshes.length > 0 && ultimateBall && !ultimateBall.isDisposed()) {
                 const ultimateModel = new BABYLON.TransformNode("ultimateModel", scene);
                 
@@ -1983,8 +2150,8 @@ var createScene = function () {
         const grenade = BABYLON.MeshBuilder.CreateSphere("grenade", {diameter: grenadeSize * 2, segments: 16}, scene);
         grenade.visibility = 0; // Make invisible, only show the 3D model
         
-        // Load the grenade 3D model
-        BABYLON.SceneLoader.ImportMesh("", GRENADE_MODEL_URL, "", scene, function(meshes) {
+        // Load the grenade 3D model (from IndexedDB cache)
+        loadCachedMesh('grenade', scene, function(meshes) {
             if (meshes.length > 0 && grenade && !grenade.isDisposed()) {
                 const grenadeModel = new BABYLON.TransformNode("grenadeModel", scene);
                 
@@ -2165,8 +2332,8 @@ var createScene = function () {
         
         droneMesh = droneCollider;
         
-        // Load the external 3D model (cached from preload, so loads instantly)
-        BABYLON.SceneLoader.ImportMesh("", DRONE_MODEL_URL, "", scene, function(meshes) {
+        // Load the external 3D model (from IndexedDB cache)
+        loadCachedMesh('drone', scene, function(meshes) {
             if (meshes.length > 0 && droneMesh) {
                 const droneModel = new BABYLON.TransformNode("droneModel", scene);
                 
@@ -2326,7 +2493,7 @@ var createScene = function () {
         
         // Load the 3D model for visual appearance (async, doesn't affect mechanics)
         try {
-            BABYLON.SceneLoader.ImportMesh("", DRONE_BOMB_MODEL_URL, "", scene, function(meshes, particleSystems, skeletons, animationGroups) {
+            loadCachedMesh('droneBomb', scene, function(meshes, particleSystems, skeletons, animationGroups) {
                 if (meshes.length > 0 && bomb && !bomb.isDisposed()) {
                     const bombModel = new BABYLON.TransformNode("bombModel", scene);
                     
@@ -2541,28 +2708,52 @@ function handleMovement() {
     }
 }
 
-const scene = createScene();
+// Initialize asset cache first, then create scene
+let scene;
 
-// Preload 3D models to cache them (they load instantly when spawning since already in browser cache)
-function preloadModels() {
-    console.log("Preloading 3D models...");
+async function initializeGame() {
+    console.log("Initializing asset cache...");
     
-    const modelsToLoad = [
-        { url: DRONE_MODEL_URL, name: "Drone" },
-        { url: ULTIMATE_MODEL_URL, name: "Ultimate" },
-        { url: BALL_MODEL_URL, name: "Ball" },
-        { url: KATANA_MODEL_URL, name: "Katana" },
-        { url: DRONE_BOMB_MODEL_URL, name: "Drone Bomb" },
-        { url: GRENADE_MODEL_URL, name: "Grenade" },
-        { url: MINE_MODEL_URL, name: "Mine" }
-    ];
+    if (loadingText) loadingText.textContent = "Checking cached assets...";
     
+    // Initialize the IndexedDB cache BEFORE creating the scene
+    await initAssetCache((modelName, success, current, total) => {
+        const progress = Math.round((current / total) * 50); // First 50% for caching
+        
+        if (loadingBar) loadingBar.style.width = progress + "%";
+        if (loadingPercent) loadingPercent.textContent = progress + "%";
+        if (loadingText) loadingText.textContent = success ? 
+            `${modelName} ready (${cachedModelUrls[modelName]?.startsWith('blob:') ? 'cached' : 'online'})` : 
+            `${modelName} will load on use...`;
+        
+        console.log(`Asset progress: ${current}/${total} (${progress}%) - ${modelName}`);
+    });
+    
+    console.log("Asset cache ready, creating scene...");
+    if (loadingText) loadingText.textContent = "Creating game world...";
+    
+    // Now create the scene (models will use cached URLs)
+    scene = createScene();
+    
+    // Initialize scene-dependent extras (multiplayer interpolation, etc.)
+    initializeSceneExtras();
+    
+    // Preload models into Babylon's asset system
+    preloadModels();
+}
+
+// Preload 3D models using IndexedDB cache (loads from disk after first visit)
+async function preloadModels() {
+    console.log("Loading models into scene...");
+    if (loadingText) loadingText.textContent = "Loading 3D models...";
+    
+    const modelNames = ['drone', 'ultimate', 'ball', 'katana', 'droneBomb', 'grenade', 'mine'];
     let loadedCount = 0;
-    const totalModels = modelsToLoad.length;
+    const totalModels = modelNames.length;
     
     function updateLoadingProgress(modelName, success) {
         loadedCount++;
-        const progress = Math.round((loadedCount / totalModels) * 100);
+        const progress = 50 + Math.round((loadedCount / totalModels) * 50); // Second 50% for loading
         
         if (loadingBar) loadingBar.style.width = progress + "%";
         if (loadingPercent) loadingPercent.textContent = progress + "%";
@@ -2595,26 +2786,33 @@ function preloadModels() {
         }, 300);
     }
     
-    // Load all models
-    modelsToLoad.forEach(model => {
-        BABYLON.SceneLoader.LoadAssetContainer(model.url, "", scene, 
+    // Load all models using cached URLs
+    modelNames.forEach(modelName => {
+        const url = getCachedModelUrl(modelName);
+        const displayName = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+        
+        // Use .glb plugin extension for blob URLs
+        const pluginExtension = isCachedBlobUrl(url) ? ".glb" : undefined;
+        
+        BABYLON.SceneLoader.LoadAssetContainer(url, "", scene, 
             function(container) {
-                console.log(`${model.name} model cached successfully`);
-                updateLoadingProgress(model.name, true);
+                console.log(`${displayName} model loaded successfully`);
+                updateLoadingProgress(displayName, true);
             }, 
             function(event) {
                 // Progress callback for individual model (optional)
             },
             function(scene, message, exception) {
-                console.warn(`Failed to preload ${model.name} model (will load on first use):`, message);
-                updateLoadingProgress(model.name, false);
-            }
+                console.warn(`Failed to preload ${displayName} model (will load on first use):`, message);
+                updateLoadingProgress(displayName, false);
+            },
+            pluginExtension
         );
     });
 }
 
-// Preload models on startup
-preloadModels();
+// Initialize game on startup (cache first, then scene)
+initializeGame();
 
 // Chat input blur handler
 document.getElementById('chatInput').addEventListener('blur', function() {
@@ -2626,59 +2824,65 @@ document.getElementById('chatInput').addEventListener('blur', function() {
 
 // Velocity-based prediction and smooth interpolation for other players
 let lastFrameTime = Date.now();
-scene.registerBeforeRender(function() {
-    const now = Date.now();
-    const deltaTime = Math.min((now - lastFrameTime) / 1000, 0.1); // Cap at 100ms to prevent huge jumps
-    lastFrameTime = now;
-    
-    Object.values(otherPlayers).forEach(p => {
-        if (p.mesh && p.targetX !== undefined) {
-            // Predict where the player should be using velocity
-            // This fills in the gaps between network updates
-            p.targetX += p.velocityX * deltaTime;
-            p.targetY += p.velocityY * deltaTime;
-            p.targetZ += p.velocityZ * deltaTime;
-            
-            // Apply gravity to Y prediction (prevents floating)
-            p.velocityY -= 9.81 * deltaTime;
-            
-            // Clamp target Y to not go below ground (approximate)
-            if (p.targetY < 0) {
-                p.targetY = 0;
-                p.velocityY = 0;
+
+// This function sets up scene-dependent code after the scene is created
+function initializeSceneExtras() {
+    setupPointerObservable();
+    startRenderLoop();
+    scene.registerBeforeRender(function() {
+        const now = Date.now();
+        const deltaTime = Math.min((now - lastFrameTime) / 1000, 0.1); // Cap at 100ms to prevent huge jumps
+        lastFrameTime = now;
+        
+        Object.values(otherPlayers).forEach(p => {
+            if (p.mesh && p.targetX !== undefined) {
+                // Predict where the player should be using velocity
+                // This fills in the gaps between network updates
+                p.targetX += p.velocityX * deltaTime;
+                p.targetY += p.velocityY * deltaTime;
+                p.targetZ += p.velocityZ * deltaTime;
+                
+                // Apply gravity to Y prediction (prevents floating)
+                p.velocityY -= 9.81 * deltaTime;
+                
+                // Clamp target Y to not go below ground (approximate)
+                if (p.targetY < 0) {
+                    p.targetY = 0;
+                    p.velocityY = 0;
+                }
+                
+                // Smoothly move mesh toward predicted target position
+                // Use faster interpolation when there's significant velocity
+                const speed = Math.sqrt(p.velocityX * p.velocityX + p.velocityZ * p.velocityZ);
+                const lerpSpeed = speed > 0.5 ? 0.4 : 0.25;
+                
+                p.mesh.position.x += (p.targetX - p.mesh.position.x) * lerpSpeed;
+                p.mesh.position.y += (p.targetY - p.mesh.position.y) * lerpSpeed;
+                p.mesh.position.z += (p.targetZ - p.mesh.position.z) * lerpSpeed;
+                
+                // Lerp rotation (handle wrap-around for smooth turning)
+                let rotDiff = p.targetRotation - p.mesh.rotation.y;
+                while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+                while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+                p.mesh.rotation.y += rotDiff * 0.35;
+                
+                // Update collider to match mesh (with offset)
+                if (p.collider) {
+                    p.collider.position.x = p.mesh.position.x;
+                    p.collider.position.y = p.mesh.position.y + 0.5;
+                    p.collider.position.z = p.mesh.position.z;
+                }
+                
+                // Smooth interpolation for other player's drone
+                if (p.droneMesh && p.droneTargetX !== undefined) {
+                    p.droneMesh.position.x += (p.droneTargetX - p.droneMesh.position.x) * 0.3;
+                    p.droneMesh.position.y += (p.droneTargetY - p.droneMesh.position.y) * 0.3;
+                    p.droneMesh.position.z += (p.droneTargetZ - p.droneMesh.position.z) * 0.3;
+                }
             }
-            
-            // Smoothly move mesh toward predicted target position
-            // Use faster interpolation when there's significant velocity
-            const speed = Math.sqrt(p.velocityX * p.velocityX + p.velocityZ * p.velocityZ);
-            const lerpSpeed = speed > 0.5 ? 0.4 : 0.25;
-            
-            p.mesh.position.x += (p.targetX - p.mesh.position.x) * lerpSpeed;
-            p.mesh.position.y += (p.targetY - p.mesh.position.y) * lerpSpeed;
-            p.mesh.position.z += (p.targetZ - p.mesh.position.z) * lerpSpeed;
-            
-            // Lerp rotation (handle wrap-around for smooth turning)
-            let rotDiff = p.targetRotation - p.mesh.rotation.y;
-            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-            p.mesh.rotation.y += rotDiff * 0.35;
-            
-            // Update collider to match mesh (with offset)
-            if (p.collider) {
-                p.collider.position.x = p.mesh.position.x;
-                p.collider.position.y = p.mesh.position.y + 0.5;
-                p.collider.position.z = p.mesh.position.z;
-            }
-            
-            // Smooth interpolation for other player's drone
-            if (p.droneMesh && p.droneTargetX !== undefined) {
-                p.droneMesh.position.x += (p.droneTargetX - p.droneMesh.position.x) * 0.3;
-                p.droneMesh.position.y += (p.droneTargetY - p.droneMesh.position.y) * 0.3;
-                p.droneMesh.position.z += (p.droneTargetZ - p.droneMesh.position.z) * 0.3;
-            }
-        }
+        });
     });
-});
+}
 
 // Multiplayer Logic
 function addOtherPlayer(playerInfo) {
@@ -2694,8 +2898,8 @@ function addOtherPlayer(playerInfo) {
     otherBat.position.set(0, -1.5, 0);
     otherBat.visibility = 0; // Always invisible - katana model will be shown instead
     
-    // Load katana 3D model for this player (cached from preload)
-    BABYLON.SceneLoader.ImportMesh("", KATANA_MODEL_URL, "", scene, function(meshes) {
+    // Load katana 3D model for this player (from IndexedDB cache)
+    loadCachedMesh('katana', scene, function(meshes) {
         if (meshes.length > 0 && otherBat && !otherBat.isDisposed()) {
             const katanaModel = new BABYLON.TransformNode("otherKatanaModel_" + playerInfo.playerId, scene);
             
@@ -2763,9 +2967,9 @@ function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeCh
             playerData.chargingBall = BABYLON.MeshBuilder.CreateSphere("otherChargingBall", {diameter: 1, segments: 8}, scene);
             playerData.chargingBall.visibility = 0;
             
-            // Load the 3D model (cached from preload, so loads instantly)
+            // Load the 3D model (from IndexedDB cache)
             const targetBall = playerData.chargingBall;
-            BABYLON.SceneLoader.ImportMesh("", ULTIMATE_MODEL_URL, "", scene, function(meshes) {
+            loadCachedMesh('ultimate', scene, function(meshes) {
                 if (meshes.length > 0 && targetBall && !targetBall.isDisposed()) {
                     const chargingModel = new BABYLON.TransformNode("otherChargingModel", scene);
                     
@@ -2824,8 +3028,8 @@ function applyOtherPlayerAnimation(playerData, animState, chargeLevel, grenadeCh
             playerData.grenadeChargingBall = BABYLON.MeshBuilder.CreateSphere("otherGrenadeChargingBall", {diameter: 1, segments: 8}, scene);
             playerData.grenadeChargingBall.visibility = 0; // Make invisible, only show the 3D model
             
-            // Load the grenade 3D model
-            BABYLON.SceneLoader.ImportMesh("", GRENADE_MODEL_URL, "", scene, function(meshes) {
+            // Load the grenade 3D model (from IndexedDB cache)
+            loadCachedMesh('grenade', scene, function(meshes) {
                 if (meshes.length > 0 && playerData.grenadeChargingBall && !playerData.grenadeChargingBall.isDisposed()) {
                     const grenadeModel = new BABYLON.TransformNode("otherGrenadeChargingModel", scene);
                     
@@ -3037,8 +3241,8 @@ socket.on('playerMoved', (playerInfo) => {
                 // Initialize position
                 p.droneMesh.position.set(playerInfo.droneX, playerInfo.droneY, playerInfo.droneZ);
                 
-                // Load the external 3D model (cached from preload, so loads instantly)
-                BABYLON.SceneLoader.ImportMesh("", DRONE_MODEL_URL, "", scene, function(meshes) {
+                // Load the external 3D model (from IndexedDB cache)
+                loadCachedMesh('drone', scene, function(meshes) {
                     if (meshes.length > 0 && p.droneMesh) {
                         const droneModel = new BABYLON.TransformNode("otherDroneModel_" + playerInfo.playerId, scene);
                         
@@ -3178,8 +3382,8 @@ socket.on('ballShot', (ballData) => {
     ball.position.set(ballData.x, ballData.y, ballData.z);
     ball.physicsImpostor = new BABYLON.PhysicsImpostor(ball, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 0.5, restitution: 0.5}, scene);
     
-    // Load the 3D model (cached from preload, so loads instantly)
-    BABYLON.SceneLoader.ImportMesh("", BALL_MODEL_URL, "", scene, function(meshes) {
+    // Load the 3D model (from IndexedDB cache)
+    loadCachedMesh('ball', scene, function(meshes) {
         if (meshes.length > 0 && ball && !ball.isDisposed()) {
             const ballModel = new BABYLON.TransformNode("ballModel", scene);
             
@@ -3285,8 +3489,8 @@ socket.on('ultimateShot', (ultimateData) => {
     ultimateBall.position.set(ultimateData.x, ultimateData.y, ultimateData.z);
     ultimateBall.physicsImpostor = new BABYLON.PhysicsImpostor(ultimateBall, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 2, restitution: 0.8}, scene);
     
-    // Load the external 3D model (cached from preload, so loads instantly)
-    BABYLON.SceneLoader.ImportMesh("", ULTIMATE_MODEL_URL, "", scene, function(meshes) {
+    // Load the external 3D model (from IndexedDB cache)
+    loadCachedMesh('ultimate', scene, function(meshes) {
         if (meshes.length > 0 && ultimateBall && !ultimateBall.isDisposed()) {
             const ultimateModel = new BABYLON.TransformNode("ultimateModel", scene);
             
@@ -3442,8 +3646,8 @@ socket.on('grenadeShot', (grenadeData) => {
     grenade.visibility = 0; // Make invisible, only show the 3D model
     grenade.position.set(grenadeData.x, grenadeData.y, grenadeData.z);
     
-    // Load the grenade 3D model
-    BABYLON.SceneLoader.ImportMesh("", GRENADE_MODEL_URL, "", scene, function(meshes) {
+    // Load the grenade 3D model (from IndexedDB cache)
+    loadCachedMesh('grenade', scene, function(meshes) {
         if (meshes.length > 0 && grenade && !grenade.isDisposed()) {
             const grenadeModel = new BABYLON.TransformNode("grenadeModel", scene);
             
@@ -3774,7 +3978,7 @@ socket.on('droneBombDropped', (bombData) => {
     
     // Load the 3D model for visual appearance (async, doesn't affect mechanics)
     try {
-        BABYLON.SceneLoader.ImportMesh("", DRONE_BOMB_MODEL_URL, "", scene, function(meshes, particleSystems, skeletons, animationGroups) {
+        loadCachedMesh('droneBomb', scene, function(meshes, particleSystems, skeletons, animationGroups) {
             if (meshes.length > 0 && bomb && !bomb.isDisposed()) {
                 const bombModel = new BABYLON.TransformNode("otherBombModel", scene);
                 
@@ -4089,8 +4293,10 @@ let canBuild = true;
 const SHOOT_COOLDOWN = 150; // ms
 const BUILD_COOLDOWN = 200; // ms
 
-// Use Babylon.js pointer observable for proper pointer lock support
-scene.onPointerObservable.add((pointerInfo) => {
+// Pointer observable setup (called after scene is created)
+function setupPointerObservable() {
+    // Use Babylon.js pointer observable for proper pointer lock support
+    scene.onPointerObservable.add((pointerInfo) => {
     if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN) {
         // Request pointer lock on any click
         if (!document.pointerLockElement) {
@@ -4130,8 +4336,8 @@ scene.onPointerObservable.add((pointerInfo) => {
             ball.position = startPos.clone();
             ball.physicsImpostor = new BABYLON.PhysicsImpostor(ball, BABYLON.PhysicsImpostor.SphereImpostor, {mass: 0.5, restitution: 0.5}, scene);
             
-            // Load the 3D model (cached from preload, so loads instantly)
-            BABYLON.SceneLoader.ImportMesh("", BALL_MODEL_URL, "", scene, function(meshes) {
+            // Load the 3D model (from IndexedDB cache)
+            loadCachedMesh('ball', scene, function(meshes) {
                 if (meshes.length > 0 && ball && !ball.isDisposed()) {
                     const ballModel = new BABYLON.TransformNode("ballModel", scene);
                     
@@ -4201,6 +4407,7 @@ scene.onPointerObservable.add((pointerInfo) => {
         }
     }
 });
+}
 
 clearBtn.onclick = function() {
     socket.emit('clearBlocks');
@@ -4411,9 +4618,12 @@ menureveal.onclick = function() {
     }
 }
 
-engine.runRenderLoop(function () {
-    scene.render();
-});
+// Render loop setup (called after scene is created)
+function startRenderLoop() {
+    engine.runRenderLoop(function () {
+        scene.render();
+    });
+}
 
 window.addEventListener("resize", function () {
     engine.resize();
