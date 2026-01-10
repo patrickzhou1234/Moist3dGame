@@ -373,27 +373,49 @@ app.get('/api/admin/ip/:ip', requireAdmin, (req, res) => {
 
 // API: Ban user (admin)
 app.post('/api/admin/users/:userId/ban', requireAdmin, (req, res) => {
-    const { reason } = req.body;
-    db.banUser(parseInt(req.params.userId), reason || 'No reason provided');
-    
-    // Kick player if online
-    for (const [socketId, player] of Object.entries(players)) {
-        if (player.odPlayerId === parseInt(req.params.userId)) {
-            const socket = io.sockets.sockets.get(socketId);
-            if (socket) {
-                socket.emit('banned', { reason: reason || 'No reason provided' });
-                socket.disconnect(true);
+    try {
+        const { reason } = req.body;
+        const userId = parseInt(req.params.userId);
+        
+        if (isNaN(userId)) {
+            return res.status(400).json({ success: false, error: 'Invalid user ID' });
+        }
+        
+        db.banUser(userId, reason || 'No reason provided');
+        
+        // Kick player if online
+        for (const [socketId, player] of Object.entries(players)) {
+            if (player.odPlayerId === userId) {
+                const socket = io.sockets.sockets.get(socketId);
+                if (socket) {
+                    socket.emit('banned', { reason: reason || 'No reason provided' });
+                    socket.disconnect(true);
+                }
             }
         }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error banning user:', error);
+        res.status(500).json({ success: false, error: 'Failed to ban user' });
     }
-    
-    res.json({ success: true });
 });
 
 // API: Unban user (admin)
 app.post('/api/admin/users/:userId/unban', requireAdmin, (req, res) => {
-    db.unbanUser(parseInt(req.params.userId));
-    res.json({ success: true });
+    try {
+        const userId = parseInt(req.params.userId);
+        
+        if (isNaN(userId)) {
+            return res.status(400).json({ success: false, error: 'Invalid user ID' });
+        }
+        
+        db.unbanUser(userId);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error unbanning user:', error);
+        res.status(500).json({ success: false, error: 'Failed to unban user' });
+    }
 });
 
 // API: Set admin status (admin)

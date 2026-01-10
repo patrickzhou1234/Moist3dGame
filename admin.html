@@ -1018,22 +1018,30 @@
         }
         
         async function banUser(userId) {
-            const result = await Swal.fire({
-                title: 'Ban User?',
-                text: 'Are you sure you want to ban this user?',
-                icon: 'warning',
+            const { value: reason } = await Swal.fire({
+                title: 'Ban User',
+                input: 'text',
+                inputLabel: 'Ban reason (optional)',
+                inputPlaceholder: 'Enter reason for ban...',
                 showCancelButton: true,
                 confirmButtonColor: '#e53935',
                 cancelButtonColor: '#666',
-                confirmButtonText: 'Yes, ban them!'
+                confirmButtonText: 'Ban User'
             });
             
-            if (result.isConfirmed) {
+            if (reason !== undefined) { // User clicked confirm (reason can be empty string)
                 try {
-                    const response = await fetch(`/api/admin/users/${userId}/ban`, { method: 'POST' });
+                    const response = await fetch(`/api/admin/users/${userId}/ban`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason: reason || 'No reason provided' })
+                    });
                     if (response.ok) {
                         loadUsers();
                         Swal.fire('Banned!', 'User has been banned.', 'success');
+                    } else {
+                        const data = await response.json();
+                        Swal.fire('Error', data.error || 'Failed to ban user.', 'error');
                     }
                 } catch (error) {
                     Swal.fire('Error', 'Failed to ban user.', 'error');
@@ -1042,14 +1050,29 @@
         }
         
         async function unbanUser(userId) {
-            try {
-                const response = await fetch(`/api/admin/users/${userId}/unban`, { method: 'POST' });
-                if (response.ok) {
-                    loadUsers();
-                    Swal.fire('Unbanned!', 'User has been unbanned.', 'success');
+            const result = await Swal.fire({
+                title: 'Unban User?',
+                text: 'Are you sure you want to unban this user?',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#4caf50',
+                cancelButtonColor: '#666',
+                confirmButtonText: 'Yes, unban them!'
+            });
+            
+            if (result.isConfirmed) {
+                try {
+                    const response = await fetch(`/api/admin/users/${userId}/unban`, { method: 'POST' });
+                    if (response.ok) {
+                        loadUsers();
+                        Swal.fire('Unbanned!', 'User has been unbanned.', 'success');
+                    } else {
+                        const data = await response.json();
+                        Swal.fire('Error', data.error || 'Failed to unban user.', 'error');
+                    }
+                } catch (error) {
+                    Swal.fire('Error', 'Failed to unban user.', 'error');
                 }
-            } catch (error) {
-                Swal.fire('Error', 'Failed to unban user.', 'error');
             }
         }
         
