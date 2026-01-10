@@ -3722,7 +3722,7 @@ socket.on('droneBombExplosion', (explosionData) => {
     createFlashEffect(position);
     
     // Apply knockback to player if nearby (stronger to match grenade power)
-    const explosionRadius = 3;
+    const explosionRadius = 5;
     const knockbackForce = 800;
     
     if (playerPhysicsBody && !isDead && !hasSpawnImmunity) {
