@@ -550,8 +550,7 @@ function renderRoomsList() {
     const mapNames = {
         'default': '🏟️ Default Arena',
         'tokyo': '🏯 Little Tokyo',
-        'platform': '☁️ Sky Platform',
-        'maze': '🔲 The Maze'
+        'plaza': '🏖️ Sunny Plaza'
     };
     
     roomsList.innerHTML = availableRooms.map(room => {
@@ -956,6 +955,16 @@ const MAP_CONFIGS = {
         rotation: [-Math.PI/2, 0, 0],
         spawnY: 20,
         groundY: -100 // No ground clamping for 3D model maps (let actual server Y prevail)
+    },
+    'plaza': {
+        url: 'https://files.catbox.moe/3sjbxo.babylon',
+        name: 'Sunny Plaza',
+        icon: '🏖️',
+        scaling: [0.005, 0.005, 0.005],
+        offset: [50, 0, 0],
+        rotation: [-Math.PI/2, -Math.PI/2, 0],
+        spawnY: 5,
+        groundY: -5
     }
 };
 
