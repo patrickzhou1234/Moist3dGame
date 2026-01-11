@@ -94,7 +94,19 @@ function updateProfileButton() {
             skinBtn.style.cssText = "width:100%; margin-bottom:10px; background-color:#9c27b0 !important;";
             skinBtn.onclick = () => {
                 settingsMenu.style.display = 'none';
-                showSkinSelector();
+                if (currentUser && (currentUser.isVIP || currentUser.isAdmin)) {
+                    showSkinSelector();
+                } else {
+                    Swal.fire({
+                        title: '👑 VIP Only',
+                        text: 'Skin customization is a VIP-exclusive feature!',
+                        icon: 'info',
+                        background: '#1a1a2e',
+                        color: '#fff',
+                        confirmButtonColor: '#ffd700',
+                        confirmButtonText: 'Got it!'
+                    });
+                }
             };
             settingsMenu.insertBefore(skinBtn, leaderboardBtn.nextSibling);
             
@@ -263,7 +275,19 @@ const selectSkinBtn = document.getElementById("selectSkinBtn");
 if (selectSkinBtn) {
     selectSkinBtn.onclick = function() {
         settingsMenu.style.display = 'none';
-        showSkinSelector();
+        if (currentUser && (currentUser.isVIP || currentUser.isAdmin)) {
+            showSkinSelector();
+        } else {
+            Swal.fire({
+                title: '👑 VIP Only',
+                text: 'Skin customization is a VIP-exclusive feature!',
+                icon: 'info',
+                background: '#1a1a2e',
+                color: '#fff',
+                confirmButtonColor: '#ffd700',
+                confirmButtonText: 'Got it!'
+            });
+        }
     };
 }
 
