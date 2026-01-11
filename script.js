@@ -86,6 +86,18 @@ function updateProfileButton() {
             leaderboardBtn.style.cssText = "width:100%; margin-bottom:10px;";
             settingsMenu.insertBefore(leaderboardBtn, profileBtn.nextSibling);
             
+            // Add skin selection button
+            const skinBtn = document.createElement("button");
+            skinBtn.id = "skinBtn";
+            skinBtn.className = "mui-btn mui-btn--raised";
+            skinBtn.innerHTML = "🎨 Select Skin";
+            skinBtn.style.cssText = "width:100%; margin-bottom:10px; background-color:#9c27b0 !important;";
+            skinBtn.onclick = () => {
+                settingsMenu.style.display = 'none';
+                showSkinSelector();
+            };
+            settingsMenu.insertBefore(skinBtn, leaderboardBtn.nextSibling);
+            
             // Add logout button
             const logoutBtn = document.createElement("button");
             logoutBtn.id = "logoutBtn";
@@ -100,6 +112,115 @@ function updateProfileButton() {
         }
     }
 }
+
+// Show skin selector popup using SweetAlert2
+function showSkinSelector() {
+    const skinOptions = AVAILABLE_SKINS.map(skin => {
+        const isSelected = selectedSkin === skin.id;
+        return `
+            <div class="skin-option ${isSelected ? 'selected' : ''}" data-skin-id="${skin.id}" style="
+                display: inline-block;
+                width: 120px;
+                padding: 15px;
+                margin: 10px;
+                border-radius: 12px;
+                background: ${isSelected ? 'linear-gradient(135deg, #4a90d9, #7c3aed)' : 'rgba(255,255,255,0.1)'};
+                border: 2px solid ${isSelected ? '#fff' : 'rgba(255,255,255,0.2)'};
+                cursor: pointer;
+                transition: all 0.3s;
+                text-align: center;
+            ">
+                <div style="font-size: 40px; margin-bottom: 10px;">${skin.icon}</div>
+                <div style="color: white; font-weight: bold;">${skin.name}</div>
+                ${isSelected ? '<div style="color: #4caf50; font-size: 12px; margin-top: 5px;">✓ Equipped</div>' : ''}
+            </div>
+        `;
+    }).join('');
+    
+    Swal.fire({
+        title: '🎨 Select Your Skin',
+        html: `
+            <div style="text-align: center; padding: 10px;">
+                <p style="color: #888; margin-bottom: 20px;">Choose a skin for your character</p>
+                <div id="skinGrid" style="display: flex; flex-wrap: wrap; justify-content: center;">
+                    ${skinOptions}
+                </div>
+            </div>
+        `,
+        background: '#1a1a2e',
+        color: '#fff',
+        showConfirmButton: true,
+        confirmButtonText: 'Close',
+        confirmButtonColor: '#4a90d9',
+        width: '600px',
+        didOpen: () => {
+            // Add click handlers to skin options
+            document.querySelectorAll('.skin-option').forEach(option => {
+                option.addEventListener('click', () => {
+                    const skinId = option.getAttribute('data-skin-id');
+                    selectSkin(skinId);
+                    Swal.close();
+                    // Reopen to show updated selection
+                    setTimeout(() => showSkinSelector(), 100);
+                });
+                
+                // Add hover effect
+                option.addEventListener('mouseenter', () => {
+                    if (!option.classList.contains('selected')) {
+                        option.style.background = 'rgba(255,255,255,0.2)';
+                        option.style.transform = 'scale(1.05)';
+                    }
+                });
+                option.addEventListener('mouseleave', () => {
+                    if (!option.classList.contains('selected')) {
+                        option.style.background = 'rgba(255,255,255,0.1)';
+                        option.style.transform = 'scale(1)';
+                    }
+                });
+            });
+        }
+    });
+}
+
+// Select a skin and apply it
+function selectSkin(skinId) {
+    if (selectedSkin === skinId) return;
+    
+    selectedSkin = skinId;
+    console.log('Selected skin:', skinId);
+    
+    // Apply skin to local player if game is running
+    if (player && scene) {
+        changeSkin(player, skinId, scene);
+    }
+    
+    // Notify server about skin change (for other players)
+    if (socket && socket.connected) {
+        socket.emit('skinChanged', { skin: skinId });
+    }
+    
+    // Save to localStorage for persistence
+    localStorage.setItem('selectedSkin', skinId);
+    
+    Swal.fire({
+        icon: 'success',
+        title: 'Skin Changed!',
+        text: `You are now using the ${AVAILABLE_SKINS.find(s => s.id === skinId)?.name || skinId} skin`,
+        timer: 1500,
+        showConfirmButton: false,
+        background: '#1a1a2e',
+        color: '#fff'
+    });
+}
+
+// Load saved skin from localStorage
+function loadSavedSkin() {
+    const saved = localStorage.getItem('selectedSkin');
+    if (saved && SKIN_MODEL_URLS.hasOwnProperty(saved)) {
+        selectedSkin = saved;
+    }
+}
+// loadSavedSkin() is called after SKIN_MODEL_URLS is defined
 
 // Check auth immediately
 checkAuth();
@@ -136,6 +257,15 @@ settingsBtn.onclick = function(e) {
         menu.style.display = 'none';
     }
 };
+
+// Select Skin button
+const selectSkinBtn = document.getElementById("selectSkinBtn");
+if (selectSkinBtn) {
+    selectSkinBtn.onclick = function() {
+        settingsMenu.style.display = 'none';
+        showSkinSelector();
+    };
+}
 
 // How to Play button
 howToPlayBtn.onclick = function() {
@@ -443,7 +573,7 @@ window.selectRoom = function(roomId) {
     }
     
     // Register player with selected room (username comes from session)
-    socket.emit('registerPlayer', { roomId: selectedRoomId });
+    socket.emit('registerPlayer', { roomId: selectedRoomId, skin: selectedSkin });
     
     // Request pointer lock
     canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock || canvas.webkitRequestPointerLock;
@@ -456,7 +586,7 @@ startGameBtn.onclick = function() {
         usernameOverlay.style.display = "none";
         hasJoined = true;
         // Register player with default room
-        socket.emit('registerPlayer', { roomId: selectedRoomId });
+        socket.emit('registerPlayer', { roomId: selectedRoomId, skin: selectedSkin });
         
         // Request pointer lock
         canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock || canvas.webkitRequestPointerLock;
@@ -766,6 +896,63 @@ const MINE_MODEL_URL = "https://files.catbox.moe/qmnt2u.glb";
 const SHIELD_BUBBLE_MODEL_URL = "https://files.catbox.moe/i5d8fc.glb"; // TODO: Replace with actual shield bubble model
 const KNOCKBACK_EXPLOSION_MODEL_URL = "https://files.catbox.moe/zcgdbt.glb"; // TODO: Replace with actual explosion model
 
+// Player Skin Models with custom transforms
+// rotation: [x, y, z] in radians, scaling: [x, y, z]
+// Use -1 as placeholder values to be configured later
+const SKIN_CONFIGS = {
+    'default': { 
+        url: null, 
+        rotation: [0, 0, 0], 
+        scaling: [1, 1, 1],
+        offset: [0, 0, 0]
+    },
+    'patrick': { 
+        url: 'https://files.catbox.moe/vj5k7v.glb', 
+        rotation: [0, 0, 0], 
+        scaling: [0.01, 0.01, 0.01],
+        offset: [0, 0, 0]
+    },
+    'beavis': { 
+        url: 'https://files.catbox.moe/4yym71.glb', 
+        rotation: [-Math.PI/2, 0, 0], 
+        scaling: [1, 1, 1],
+        offset: [0, 0, 0]
+    },
+    'homer': { 
+        url: 'https://files.catbox.moe/w0zl03.glb', 
+        rotation: [Math.PI/2, 0, Math.PI], 
+        scaling: [1, 1, 1],
+        offset: [0, 0, 0]
+    },
+    'patrick simpson': { 
+        url: 'https://files.catbox.moe/015t9e.glb', 
+        rotation: [0, -Math.PI/2, 0],
+        scaling: [0.1, 0.1, 0.1],
+        offset: [0, 0, 0]
+    }
+};
+
+// Legacy compatibility - extract just URLs
+const SKIN_MODEL_URLS = Object.fromEntries(
+    Object.entries(SKIN_CONFIGS).map(([id, config]) => [id, config.url])
+);
+    
+// Available skins for selection
+const AVAILABLE_SKINS = [
+    { id: 'default', name: 'Default', icon: '👤' },
+    { id: 'patrick', name: 'Patrick', icon: '👨‍🦱' },
+    { id: 'beavis', name: 'Beavis', icon: '👨‍🦳' },
+    { id: 'homer', name: 'Homer', icon: '👴' },
+    { id: 'patrick simpson', name: 'Patrick Simpson', icon: '🍩' }
+];
+
+// Currently selected skin
+let selectedSkin = 'default';
+let mySkinModel = null; // Reference to loaded skin 3D model for local player
+
+// Load saved skin preference from localStorage
+loadSavedSkin();
+
 // ============ ASSET CACHE SYSTEM (IndexedDB) ============
 // Caches 3D models locally so they don't need to be re-downloaded each visit
 
@@ -783,7 +970,11 @@ const MODELS_TO_CACHE = [
     { name: 'grenade', url: GRENADE_MODEL_URL },
     { name: 'mine', url: MINE_MODEL_URL },
     { name: 'shieldBubble', url: SHIELD_BUBBLE_MODEL_URL },
-    { name: 'knockbackExplosion', url: KNOCKBACK_EXPLOSION_MODEL_URL }
+    { name: 'knockbackExplosion', url: KNOCKBACK_EXPLOSION_MODEL_URL },
+    // Skin models (only add non-null skin URLs)
+    ...Object.entries(SKIN_MODEL_URLS)
+        .filter(([id, url]) => url !== null)
+        .map(([id, url]) => ({ name: 'skin_' + id, url: url }))
 ];
 
 // Cached blob URLs for instant loading
@@ -1137,7 +1328,14 @@ function disposeMine(mine) {
 // Cleanup other player resources
 function cleanupOtherPlayerResources(playerData) {
     if (!playerData) return;
-    if (playerData.mesh) playerData.mesh.dispose();
+    if (playerData.mesh) {
+        // Dispose skin model if present
+        if (playerData.mesh.skinModel) {
+            playerData.mesh.skinModel.getChildMeshes().forEach(mesh => mesh.dispose());
+            playerData.mesh.skinModel.dispose();
+        }
+        playerData.mesh.dispose();
+    }
     if (playerData.collider) playerData.collider.dispose();
     if (playerData.chargingBall) {
         if (playerData.chargingBall.chargingModel) {
@@ -1176,19 +1374,44 @@ let lastPositionUpdateTime = 0;
 const POSITION_UPDATE_INTERVAL = 33; // ~30 updates per second for smoother sync
 
 // Helper to set visibility on all child meshes of a character
+// Respects skins - if a skin is active, default mesh parts stay hidden
 function setPlayerMeshVisibility(characterRoot, visible) {
-    const children = characterRoot.getChildMeshes();
-    children.forEach(child => {
-        child.isVisible = visible;
-    });
+    if (!characterRoot) return;
+    
+    // Check if this character has a skin model active
+    const hasSkin = characterRoot.skinModel && !characterRoot.skinModel.isDisposed();
+    
+    if (hasSkin) {
+        // Only toggle visibility on the skin model, keep default parts hidden
+        const skinMeshes = characterRoot.skinModel.getChildMeshes();
+        skinMeshes.forEach(mesh => {
+            mesh.isVisible = visible;
+        });
+        
+        // Ensure default mesh parts stay hidden
+        if (characterRoot.defaultMeshParts) {
+            characterRoot.defaultMeshParts.forEach(part => {
+                part.isVisible = false;
+            });
+        }
+    } else {
+        // No skin, toggle all child meshes (default behavior)
+        const children = characterRoot.getChildMeshes();
+        children.forEach(child => {
+            child.isVisible = visible;
+        });
+    }
 }
 
 // Active key state tracking
 const keysPressed = {};
 
 // Create a humanoid character mesh
-function createCharacterMesh(scene, name, color, username) {
+function createCharacterMesh(scene, name, color, username, skinId) {
     const characterRoot = new BABYLON.TransformNode(name, scene);
+    
+    // Store the skin ID on the character for reference
+    characterRoot.skinId = skinId || 'default';
     
     // Create Username Label
     if (username) {
@@ -1213,11 +1436,15 @@ function createCharacterMesh(scene, name, color, username) {
     mat.diffuseColor = color;
     mat.specularColor = new BABYLON.Color3(0.2, 0.2, 0.2);
     
+    // Array to store all default mesh parts (for visibility toggle when using skins)
+    const defaultMeshParts = [];
+    
     // Helper function to setup mesh and prevent culling issues
     function setupMesh(mesh) {
         mesh.material = mat;
         mesh.parent = characterRoot;
         mesh.alwaysSelectAsActiveMesh = true; // Prevent frustum culling
+        defaultMeshParts.push(mesh);
     }
     
     // Body (torso)
@@ -1247,12 +1474,14 @@ function createCharacterMesh(scene, name, color, username) {
     leftEye.material = eyeMat;
     leftEye.parent = characterRoot;
     leftEye.alwaysSelectAsActiveMesh = true;
+    defaultMeshParts.push(leftEye);
     
     const rightEye = BABYLON.MeshBuilder.CreateSphere(name + "RightEye", {diameter: 0.1}, scene);
     rightEye.position.set(0.1, 1.1, 0.2);
     rightEye.material = eyeMat;
     rightEye.parent = characterRoot;
     rightEye.alwaysSelectAsActiveMesh = true;
+    defaultMeshParts.push(rightEye);
     
     // Pupils
     const pupilMat = new BABYLON.StandardMaterial(name + "PupilMat", scene);
@@ -1263,12 +1492,14 @@ function createCharacterMesh(scene, name, color, username) {
     leftPupil.material = pupilMat;
     leftPupil.parent = characterRoot;
     leftPupil.alwaysSelectAsActiveMesh = true;
+    defaultMeshParts.push(leftPupil);
     
     const rightPupil = BABYLON.MeshBuilder.CreateSphere(name + "RightPupil", {diameter: 0.05}, scene);
     rightPupil.position.set(0.1, 1.1, 0.24);
     rightPupil.material = pupilMat;
     rightPupil.parent = characterRoot;
     rightPupil.alwaysSelectAsActiveMesh = true;
+    defaultMeshParts.push(rightPupil);
     
     // Left Arm
     const leftArm = BABYLON.MeshBuilder.CreateCapsule(name + "LeftArm", {
@@ -1308,7 +1539,103 @@ function createCharacterMesh(scene, name, color, username) {
     characterRoot.leftArm = leftArm;
     characterRoot.rightArm = rightArm;
     
+    // Store default mesh parts for visibility control
+    characterRoot.defaultMeshParts = defaultMeshParts;
+    
+    // Load and apply 3D skin model if not default
+    if (skinId && skinId !== 'default' && SKIN_MODEL_URLS[skinId]) {
+        loadSkinModel(characterRoot, skinId, scene);
+    }
+    
     return characterRoot;
+}
+
+// Load a 3D skin model and attach it to a character
+function loadSkinModel(characterRoot, skinId, scene) {
+    const skinCacheName = 'skin_' + skinId;
+    const skinConfig = SKIN_CONFIGS[skinId] || SKIN_CONFIGS['default'];
+    
+    loadCachedMesh(skinCacheName, scene, function(meshes) {
+        if (meshes.length > 0 && characterRoot && !characterRoot.isDisposed()) {
+            // Create a container for the skin model
+            const skinModel = new BABYLON.TransformNode("skinModel_" + characterRoot.name, scene);
+            skinModel.parent = characterRoot;
+            
+            // Apply custom offset (use 0 if placeholder -1)
+            const offset = skinConfig.offset;
+            skinModel.position = new BABYLON.Vector3(
+                offset[0] === -1 ? 0 : offset[0],
+                offset[1] === -1 ? 0 : offset[1],
+                offset[2] === -1 ? 0 : offset[2]
+            );
+            
+            // Apply custom scaling (use 1 if placeholder -1)
+            const scale = skinConfig.scaling;
+            skinModel.scaling = new BABYLON.Vector3(
+                scale[0] === -1 ? 1 : scale[0],
+                scale[1] === -1 ? 1 : scale[1],
+                scale[2] === -1 ? 1 : scale[2]
+            );
+            
+            // Apply custom rotation (use 0 if placeholder -1)
+            const rot = skinConfig.rotation;
+            skinModel.rotation = new BABYLON.Vector3(
+                rot[0] === -1 ? 0 : rot[0],
+                rot[1] === -1 ? 0 : rot[1],
+                rot[2] === -1 ? 0 : rot[2]
+            );
+            
+            // Attach all loaded meshes to the skin container
+            meshes.forEach(mesh => {
+                mesh.parent = skinModel;
+                mesh.isPickable = false;
+                mesh.alwaysSelectAsActiveMesh = true;
+            });
+            
+            // Hide the default mesh parts (for both local player and other players)
+            if (characterRoot.defaultMeshParts) {
+                characterRoot.defaultMeshParts.forEach(part => {
+                    part.isVisible = false;
+                });
+            }
+            
+            // Store reference to the skin model
+            characterRoot.skinModel = skinModel;
+            
+            console.log('Loaded skin model:', skinId, 'for', characterRoot.name, 'with config:', skinConfig);
+        }
+    }, null, function(scene, message, exception) {
+        console.error("Failed to load skin model:", skinId, message, exception);
+        // Keep using default mesh on failure
+    });
+}
+
+// Change skin for a character (used when player changes their skin)
+function changeSkin(characterRoot, newSkinId, scene) {
+    if (!characterRoot) return;
+    
+    // Remove existing skin model if any
+    if (characterRoot.skinModel) {
+        // Dispose child meshes first
+        characterRoot.skinModel.getChildMeshes().forEach(mesh => mesh.dispose());
+        characterRoot.skinModel.dispose();
+        characterRoot.skinModel = null;
+    }
+    
+    // Update stored skin ID
+    characterRoot.skinId = newSkinId;
+    
+    if (newSkinId === 'default' || !SKIN_MODEL_URLS[newSkinId]) {
+        // Show default mesh parts
+        if (characterRoot.defaultMeshParts) {
+            characterRoot.defaultMeshParts.forEach(part => {
+                part.isVisible = true;
+            });
+        }
+    } else {
+        // Load new skin model
+        loadSkinModel(characterRoot, newSkinId, scene);
+    }
 }
 
 var createScene = function () {
@@ -1379,8 +1706,8 @@ var createScene = function () {
     playerPhysicsBody.visibility = 0;
     playerPhysicsBody.physicsImpostor = new BABYLON.PhysicsImpostor(playerPhysicsBody, BABYLON.PhysicsImpostor.SphereImpostor, {mass:1, restitution:0.3, friction: 0.5}, scene);
     
-    // Player visual mesh (humanoid character)
-    player = createCharacterMesh(scene, "player", new BABYLON.Color3(0.2, 0.6, 1), myUsername);
+    // Player visual mesh (humanoid character) with selected skin
+    player = createCharacterMesh(scene, "player", new BABYLON.Color3(0.2, 0.6, 1), myUsername, selectedSkin);
     player.position.y = 3;
 
     // Create bat attached to player's right arm (invisible physics hitbox)
@@ -3075,10 +3402,10 @@ function initializeSceneExtras() {
 
 // Multiplayer Logic
 function addOtherPlayer(playerInfo) {
-    console.log('Adding other player:', playerInfo.playerId.substring(0, 8));
+    console.log('Adding other player:', playerInfo.playerId.substring(0, 8), 'skin:', playerInfo.skin || 'default');
     
-    // Visual humanoid character (red)
-    const mesh = createCharacterMesh(scene, "otherPlayer_" + playerInfo.playerId, new BABYLON.Color3(1, 0.3, 0.3), playerInfo.username || "Player");
+    // Visual humanoid character (red) with their selected skin
+    const mesh = createCharacterMesh(scene, "otherPlayer_" + playerInfo.playerId, new BABYLON.Color3(1, 0.3, 0.3), playerInfo.username || "Player", playerInfo.skin || 'default');
     mesh.position.set(playerInfo.x, playerInfo.y - 0.5, playerInfo.z);
     
     // Create bat for this player (attached to their right arm, hidden by default)
@@ -3129,6 +3456,7 @@ function addOtherPlayer(playerInfo) {
         shieldBubbleTimer: null,  // Timer to remove shield after immunity duration
         lastAnimState: 'idle',
         username: playerInfo.username || "Player", // Store username here for easy access
+        skin: playerInfo.skin || 'default', // Store their selected skin
         // Position and velocity for smooth interpolation
         serverX: playerInfo.x,
         serverY: playerInfo.y - 0.5,
@@ -3482,6 +3810,16 @@ socket.on('disconnectPlayer', (playerId) => {
     if (otherPlayers[playerId]) {
         cleanupOtherPlayerResources(otherPlayers[playerId]);
         delete otherPlayers[playerId];
+    }
+});
+
+// Handle other player changing their skin
+socket.on('playerSkinChanged', (data) => {
+    const { playerId, skin } = data;
+    if (otherPlayers[playerId] && otherPlayers[playerId].mesh) {
+        console.log('Player', playerId.substring(0, 8), 'changed skin to:', skin);
+        changeSkin(otherPlayers[playerId].mesh, skin, scene);
+        otherPlayers[playerId].skin = skin;
     }
 });
 

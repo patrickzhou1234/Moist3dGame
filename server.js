@@ -575,7 +575,7 @@ io.on('connection', (socket) => {
             }
         }
         
-        console.log('Player registered:', socket.id, 'Username:', session.user.username, 'Room:', room.name);
+        console.log('Player registered:', socket.id, 'Username:', session.user.username, 'Room:', room.name, 'Skin:', data.skin || 'default');
         
         // Track IP
         db.trackUserIP(session.user.id, clientIp);
@@ -600,7 +600,8 @@ io.on('connection', (socket) => {
             rotation: 0,
             playerId: socket.id,
             roomId: roomId,
-            joinTime: Date.now()
+            joinTime: Date.now(),
+            skin: data.skin || 'default' // Player's selected skin
         };
 
         // Add to room
@@ -753,6 +754,20 @@ io.on('connection', (socket) => {
             const roomId = players[socket.id].roomId;
             // Broadcast to other players in the same room
             socket.to(roomId).emit('blockHit', hitData);
+        }
+    });
+
+    // Handle skin change
+    socket.on('skinChanged', (data) => {
+        if (players[socket.id] && data.skin) {
+            players[socket.id].skin = data.skin;
+            const roomId = players[socket.id].roomId;
+            // Broadcast skin change to other players in the same room
+            socket.to(roomId).emit('playerSkinChanged', {
+                playerId: socket.id,
+                skin: data.skin
+            });
+            console.log(`Player ${players[socket.id].username} changed skin to: ${data.skin}`);
         }
     });
 
