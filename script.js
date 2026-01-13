@@ -968,14 +968,14 @@ const MAP_CONFIGS = {
         groundY: -5
     },
     'forest': {
-        url: 'https://files.catbox.moe/73gps9.babylon',
+        url: 'https://files.catbox.moe/ddmfcx.babylon',
         name: 'Forest',
         icon: '🌲',
-        scaling: [0.1, 0.1, 0.1],
-        offset: [1000, 0, 0],
-        rotation: [0, 0, 0],
-        spawnY: 5,
-        groundY: -5
+        scaling: [0.01, 0.01, 0.01],
+        offset: [-60, -10, 50],
+        rotation: [-Math.PI/2, 0, 0],
+        spawnY: 40,
+        groundY: 0
     }
 };
 
