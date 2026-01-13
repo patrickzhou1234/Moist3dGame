@@ -722,6 +722,30 @@ const DEATH_HEIGHT = -15;
 const DEATH_CEILING = 100; // Die if you go above this height
 const SPAWN_POSITION = new BABYLON.Vector3(0, 3, 0);
 
+// Killstreak tracking
+let killstreak = 0;
+
+// Function to update killstreak display
+function updateKillstreakDisplay() {
+    const killstreakDisplay = document.getElementById('killstreakDisplay');
+    const killstreakCount = document.getElementById('killstreakCount');
+    
+    if (killstreakDisplay && killstreakCount) {
+        if (killstreak > 0) {
+            killstreakCount.textContent = killstreak;
+            killstreakDisplay.style.display = 'block';
+            
+            // Add animation effect for new killstreak milestones
+            killstreakDisplay.style.animation = 'none';
+            setTimeout(() => {
+                killstreakDisplay.style.animation = 'killstreakPulse 0.3s ease-out';
+            }, 10);
+        } else {
+            killstreakDisplay.style.display = 'none';
+        }
+    }
+}
+
 // Spawn immunity state
 let hasSpawnImmunity = false;
 let spawnImmunityTimer = null;
@@ -3107,6 +3131,10 @@ var createScene = function () {
         if (isDead) return; // Already dead
         isDead = true;
         
+        // Reset killstreak when player dies
+        killstreak = 0;
+        updateKillstreakDisplay();
+        
         // Cancel any charging abilities
         if (isChargingUltimate) {
             cancelUltimate();
@@ -4784,6 +4812,10 @@ socket.on('killConfirmed', (data) => {
     const killedName = document.getElementById('killedName');
     killedName.textContent = data.victimName;
     killAnim.style.display = 'block';
+    
+    // Increment killstreak
+    killstreak++;
+    updateKillstreakDisplay();
     
     // Play sound or particle effect could go here
     
