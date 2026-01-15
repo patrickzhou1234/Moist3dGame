@@ -1037,6 +1037,25 @@ const BALLOON_VELOCITY_FACTOR = 0.15; // How strongly balloon affects velocity
 const BALLOON_GROUND_LEVEL = 0; // Reference ground level
 const BALLOON_DURATION = 15000; // Balloon lasts 15 seconds
 
+// Homer Simpson Donut Shield ability state (exclusive to Homer skin)
+let isChargingDonutShield = false;
+let donutShieldCharge = 0;
+let donutShieldChargingMesh = null;
+let isDonutShieldActive = false;
+let donutShieldMesh = null;
+let donutShieldTimer = null;
+let isSugarRushActive = false;
+let sugarRushTimer = null;
+let sugarRushParticles = null;
+let sugarRushPoints = 0; // Absorbed projectiles counter
+let originalKatanaCooldown = true; // Track if katana cooldown was enabled
+const DONUT_SHIELD_CHARGE_TIME = 2000; // 2 seconds to charge
+const DONUT_SHIELD_CHARGE_RATE = 100 / (DONUT_SHIELD_CHARGE_TIME / 16.67);
+const DONUT_SHIELD_DURATION = 3000; // 3 seconds active
+const DONUT_SHIELD_RADIUS = 2.0; // Absorption radius
+const SUGAR_RUSH_DURATION = 10000; // 10 seconds speed boost
+const SUGAR_RUSH_SPEED_MULTIPLIER = 4; // 4x movement speed
+
 // Preloaded 3D models
 const DRONE_MODEL_URL = "https://files.catbox.moe/z7hxt9.glb";
 const ULTIMATE_MODEL_URL = "https://files.catbox.moe/84ufxa.glb";
@@ -1048,6 +1067,8 @@ const MINE_MODEL_URL = "https://files.catbox.moe/qmnt2u.glb";
 const SHIELD_BUBBLE_MODEL_URL = "https://files.catbox.moe/i5d8fc.glb"; // TODO: Replace with actual shield bubble model
 const KNOCKBACK_EXPLOSION_MODEL_URL = "https://dl.dropboxusercontent.com/scl/fi/3bfqc1g8l59zd83axg3kk/flame__test.glb?rlkey=1i9jbvz516f1poghtj0w4h08t&st=s7qz0834&dl=1";
 const WATER_BALLOON_MODEL_URL = "https://files.catbox.moe/np2dou.glb"; // TODO: Replace with actual water balloon model
+const DONUT_MODEL_URL = "https://files.catbox.moe/sacv40.glb"; // TODO: Replace with actual donut model
+
 
 // ============ MAP SYSTEM ============
 // Map configurations - .babylon files for custom arenas
@@ -1218,6 +1239,7 @@ const MODELS_TO_CACHE = [
     { name: 'shieldBubble', url: SHIELD_BUBBLE_MODEL_URL },
     { name: 'knockbackExplosion', url: KNOCKBACK_EXPLOSION_MODEL_URL },
     { name: 'waterBalloon', url: WATER_BALLOON_MODEL_URL },
+    { name: 'donut', url: DONUT_MODEL_URL },
     // Skin models (only add non-null skin URLs)
     ...Object.entries(SKIN_MODEL_URLS)
         .filter(([id, url]) => url !== null)
@@ -3291,6 +3313,11 @@ var createScene = function () {
             window.updateBalloonAbility();
         }
         
+        // Update Homer Donut Shield ability (charging visual, spin, and projectile absorption)
+        if (window.updateDonutShieldAbility) {
+            window.updateDonutShieldAbility();
+        }
+        
         // Drone mode controls
         if (isDroneMode && droneMesh && droneCamera) {
             // Drone movement with WASD
@@ -3414,6 +3441,9 @@ var createScene = function () {
                         waterBalloonChargeLevel: isChargingWaterBalloon ? waterBalloonCharge : 0,
                         balloonChargeLevel: window.getBalloonChargeLevel ? window.getBalloonChargeLevel() : 0,
                         isBalloonActive: window.isBalloonActive ? window.isBalloonActive() : false,
+                        donutShieldChargeLevel: window.getDonutShieldChargeLevel ? window.getDonutShieldChargeLevel() : 0,
+                        isDonutShieldActive: window.isDonutShieldActive ? window.isDonutShieldActive() : false,
+                        isSugarRushActive: window.isSugarRushActive ? window.isSugarRushActive() : false,
                         isDroneMode: isDroneMode,
                         droneX: droneMesh ? droneMesh.position.x : 0,
                         droneY: droneMesh ? droneMesh.position.y : 0,
@@ -3465,6 +3495,26 @@ var createScene = function () {
         }
         if (window.deactivateBalloon) {
             window.deactivateBalloon();
+        }
+        
+        // Cancel donut shield and sugar rush if active (Homer ability)
+        if (window.cancelDonutShield) {
+            window.cancelDonutShield();
+        }
+        if (isDonutShieldActive) {
+            // Don't trigger sugar rush on death - just clean up
+            isDonutShieldActive = false;
+            if (donutShieldTimer) {
+                clearTimeout(donutShieldTimer);
+                donutShieldTimer = null;
+            }
+            if (donutShieldMesh) {
+                donutShieldMesh.dispose();
+                donutShieldMesh = null;
+            }
+        }
+        if (window.deactivateSugarRush) {
+            window.deactivateSugarRush();
         }
         
         // Notify other players that we died (hide our character on their screens)
@@ -5474,6 +5524,488 @@ var createScene = function () {
         return isBalloonActive;
     };
     
+    // ============ HOMER SIMPSON DONUT SHIELD ABILITY ============
+    
+    // Start charging donut shield (Homer skin only)
+    window.startChargingDonutShield = function() {
+        // Only works with Homer skin
+        if (selectedSkin !== 'homer') {
+            return;
+        }
+        
+        // Can't charge if shield is already active
+        if (isDonutShieldActive || isSugarRushActive) {
+            return;
+        }
+        
+        if (isDead || isChargingDonutShield || isDroneMode || 
+            isChargingUltimate || isChargingGrenade || isChargingDrone || isChargingCloth || 
+            isChargingGrapple || isGrappling || isSwingingBat || isChargingWaterBalloon || 
+            isWaterBalloonFlying || isChargingBalloon || isBalloonActive) return;
+        
+        // Break spawn immunity when activating ability
+        breakSpawnImmunity();
+        
+        isChargingDonutShield = true;
+        donutShieldCharge = 0;
+        sugarRushPoints = 0;
+        currentAnimState = 'charging';
+        
+        // Create charging visual (torus around player)
+        if (!donutShieldChargingMesh) {
+            donutShieldChargingMesh = BABYLON.MeshBuilder.CreateTorus("donutShieldCharging", {
+                diameter: 1.5,
+                thickness: 0.2,
+                tessellation: 24
+            }, scene);
+            const chargeMat = new BABYLON.StandardMaterial("donutShieldChargeMat", scene);
+            chargeMat.diffuseColor = new BABYLON.Color3(0.85, 0.55, 0.25); // Donut brown
+            chargeMat.emissiveColor = new BABYLON.Color3(0.4, 0.25, 0.1);
+            chargeMat.alpha = 0.7;
+            donutShieldChargingMesh.material = chargeMat;
+        }
+        
+        // Notify server about charging start
+        socket.emit('donutShieldChargeStart');
+    };
+    
+    // Cancel donut shield charging
+    window.cancelDonutShield = function() {
+        if (isChargingDonutShield) {
+            isChargingDonutShield = false;
+            donutShieldCharge = 0;
+            currentAnimState = 'idle';
+            
+            if (donutShieldChargingMesh) {
+                donutShieldChargingMesh.dispose();
+                donutShieldChargingMesh = null;
+            }
+            
+            const donutContainer = document.getElementById('donutShieldContainer');
+            if (donutContainer) donutContainer.style.display = 'none';
+            
+            // Notify server that charging was cancelled
+            socket.emit('donutShieldChargeCancelled');
+            
+            resetPlayerArms();
+        }
+    };
+    
+    // Activate donut shield
+    window.activateDonutShield = function() {
+        if (isDonutShieldActive) return;
+        
+        isDonutShieldActive = true;
+        isChargingDonutShield = false;
+        donutShieldCharge = 0;
+        sugarRushPoints = 0;
+        currentAnimState = 'idle';
+        
+        // Dispose charging mesh
+        if (donutShieldChargingMesh) {
+            donutShieldChargingMesh.dispose();
+            donutShieldChargingMesh = null;
+        }
+        
+        const donutContainer = document.getElementById('donutShieldContainer');
+        if (donutContainer) donutContainer.style.display = 'none';
+        
+        resetPlayerArms();
+        
+        // Create the spinning donut shield mesh around player's waist
+        createDonutShieldVisual();
+        
+        // Emit to server for other players
+        socket.emit('donutShieldActivate', {
+            x: playerPhysicsBody.position.x,
+            y: playerPhysicsBody.position.y,
+            z: playerPhysicsBody.position.z
+        });
+        
+        console.log('Donut Shield activated! Will absorb projectiles for 3 seconds.');
+        
+        // Set timer to deactivate shield after duration
+        if (donutShieldTimer) {
+            clearTimeout(donutShieldTimer);
+        }
+        donutShieldTimer = setTimeout(() => {
+            window.deactivateDonutShield();
+            donutShieldTimer = null;
+        }, DONUT_SHIELD_DURATION);
+    };
+    
+    // Deactivate donut shield and start Sugar Rush (only if projectiles absorbed)
+    window.deactivateDonutShield = function() {
+        if (!isDonutShieldActive) return;
+        
+        isDonutShieldActive = false;
+        
+        // Clear timer if manually deactivated
+        if (donutShieldTimer) {
+            clearTimeout(donutShieldTimer);
+            donutShieldTimer = null;
+        }
+        
+        // Dispose shield mesh
+        if (donutShieldMesh) {
+            donutShieldMesh.dispose();
+            donutShieldMesh = null;
+        }
+        
+        // Only start Sugar Rush if we absorbed projectiles
+        if (sugarRushPoints > 0) {
+            console.log('Donut Shield deactivated! Starting Sugar Rush with ' + sugarRushPoints + ' projectiles absorbed!');
+            
+            // Emit deactivation with sugar rush
+            socket.emit('donutShieldDeactivate', {
+                sugarRushActive: true,
+                sugarRushPoints: sugarRushPoints
+            });
+            
+            // Start Sugar Rush passive with scaled duration
+            window.activateSugarRush(sugarRushPoints);
+        } else {
+            console.log('Donut Shield deactivated! No projectiles absorbed - no Sugar Rush.');
+            
+            // Emit deactivation without sugar rush
+            socket.emit('donutShieldDeactivate', {
+                sugarRushActive: false,
+                sugarRushPoints: 0
+            });
+        }
+    };
+    
+    // Create donut shield visual around player's waist
+    function createDonutShieldVisual() {
+        if (donutShieldMesh) {
+            donutShieldMesh.dispose();
+        }
+        
+        // Create large spinning donut torus (fallback visual)
+        donutShieldMesh = BABYLON.MeshBuilder.CreateTorus("donutShield", {
+            diameter: DONUT_SHIELD_RADIUS * 2,
+            thickness: 0.5,
+            tessellation: 32
+        }, scene);
+        const donutMat = new BABYLON.StandardMaterial("donutShieldMat", scene);
+        donutMat.diffuseColor = new BABYLON.Color3(0.9, 0.6, 0.3); // Donut golden brown
+        donutMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.1);
+        donutMat.specularColor = new BABYLON.Color3(0.5, 0.4, 0.3);
+        donutMat.specularPower = 16;
+        donutShieldMesh.material = donutMat;
+        donutShieldMesh.isPickable = false;
+        
+        // Try to load 3D donut model to replace the torus
+        loadCachedMesh('donut', scene, function(meshes) {
+            if (meshes.length > 0 && donutShieldMesh && !donutShieldMesh.isDisposed()) {
+                // Hide fallback torus
+                donutShieldMesh.visibility = 0;
+                
+                const donutModel = new BABYLON.TransformNode("donutShieldModel", scene);
+                meshes.forEach(mesh => {
+                    mesh.parent = donutModel;
+                    mesh.isPickable = false;
+                });
+                
+                donutModel.parent = donutShieldMesh;
+                donutModel.position = new BABYLON.Vector3(0, -1, 0);
+                donutModel.scaling = new BABYLON.Vector3(0.02, 0.02, 0.02);
+                donutModel.rotation = new BABYLON.Vector3(-Math.PI/2, 0, 0);
+                donutShieldMesh.donutModel = donutModel;
+            }
+        }, function(scene, message, exception) {
+            // Model failed to load, keep using fallback torus (already visible)
+            console.log("Using fallback donut torus (model not loaded)");
+        });
+    }
+    
+    // Activate Sugar Rush passive effect (duration scales with absorbed projectiles)
+    window.activateSugarRush = function(projectileCount) {
+        if (isSugarRushActive) return;
+        
+        projectileCount = projectileCount || 1;
+        
+        // Calculate duration: 2 seconds per projectile, min 2s, max 15s
+        const scaledDuration = Math.min(Math.max(projectileCount * 2000, 2000), 15000);
+        
+        isSugarRushActive = true;
+        originalKatanaCooldown = canSwingBat;
+        
+        // Show Sugar Rush indicator
+        const sugarIndicator = document.getElementById('sugarRushIndicator');
+        if (sugarIndicator) sugarIndicator.style.display = 'block';
+        
+        // Create cone particle emitter from player's head
+        createSugarRushParticles();
+        
+        console.log('SUGAR RUSH! 4x speed for ' + (scaledDuration / 1000) + ' seconds! (' + projectileCount + ' projectiles absorbed)');
+        
+        // Emit to server
+        socket.emit('sugarRushStart', { duration: scaledDuration, projectileCount: projectileCount });
+        
+        // Set timer to deactivate after scaled duration
+        if (sugarRushTimer) {
+            clearTimeout(sugarRushTimer);
+        }
+        sugarRushTimer = setTimeout(() => {
+            window.deactivateSugarRush();
+            sugarRushTimer = null;
+        }, scaledDuration);
+        
+        // Auto-katana: when F is held during Sugar Rush, katana auto-swings
+        window._sugarRushAutoSwingInterval = setInterval(() => {
+            if (isSugarRushActive && keysPressed['KeyF'] && !isDead) {
+                window.swingBat();
+            }
+        }, 100); // Check every 100ms if F is held
+    };
+    
+    // Deactivate Sugar Rush
+    window.deactivateSugarRush = function() {
+        if (!isSugarRushActive) return;
+        
+        isSugarRushActive = false;
+        
+        // Clear timer
+        if (sugarRushTimer) {
+            clearTimeout(sugarRushTimer);
+            sugarRushTimer = null;
+        }
+        
+        // Clear auto-swing interval
+        if (window._sugarRushAutoSwingInterval) {
+            clearInterval(window._sugarRushAutoSwingInterval);
+            window._sugarRushAutoSwingInterval = null;
+        }
+        
+        // Hide indicator
+        const sugarIndicator = document.getElementById('sugarRushIndicator');
+        if (sugarIndicator) sugarIndicator.style.display = 'none';
+        
+        // Stop and dispose particles
+        if (sugarRushParticles) {
+            sugarRushParticles.stop();
+            sugarRushParticles.dispose();
+            sugarRushParticles = null;
+        }
+        
+        console.log('Sugar Rush ended!');
+        
+        // Emit to server
+        socket.emit('sugarRushEnd');
+    };
+    
+    // Create Sugar Rush particles (cone emitter from head)
+    function createSugarRushParticles() {
+        if (sugarRushParticles) {
+            sugarRushParticles.dispose();
+        }
+        
+        // Create particle system
+        sugarRushParticles = new BABYLON.ParticleSystem("sugarRushParticles", 2000, scene);
+        
+        // Texture of each particle
+        sugarRushParticles.particleTexture = new BABYLON.Texture("https://www.babylonjs-playground.com/textures/flare.png", scene);
+        
+        // Emitter position (will be updated each frame)
+        sugarRushParticles.emitter = playerPhysicsBody.position.clone();
+        
+        // Colors - blue/cyan energy particles
+        sugarRushParticles.color1 = new BABYLON.Color4(0.7, 0.8, 1.0, 1.0);
+        sugarRushParticles.color2 = new BABYLON.Color4(0.2, 0.5, 1.0, 1.0);
+        sugarRushParticles.colorDead = new BABYLON.Color4(0, 0, 0.2, 0.0);
+        
+        // Size of each particle
+        sugarRushParticles.minSize = 0.1;
+        sugarRushParticles.maxSize = 0.5;
+        
+        // Life time
+        sugarRushParticles.minLifeTime = 0.3;
+        sugarRushParticles.maxLifeTime = 1.5;
+        
+        // Emission rate
+        sugarRushParticles.emitRate = 1000;
+        
+        // Cone emitter - particles shoot upward in a cone
+        const radius = 0.3;
+        const angle = Math.PI / 3; // 60 degree cone
+        sugarRushParticles.createConeEmitter(radius, angle);
+        
+        // Speed
+        sugarRushParticles.minEmitPower = 2;
+        sugarRushParticles.maxEmitPower = 4;
+        sugarRushParticles.updateSpeed = 0.005;
+        
+        // Start the particle system
+        sugarRushParticles.start();
+    }
+    
+    // Update donut shield position and check projectile absorption (called each frame)
+    window.updateDonutShieldAbility = function() {
+        if (!playerPhysicsBody) return;
+        
+        // Update charging visual position and size
+        if (isChargingDonutShield && donutShieldChargingMesh) {
+            const chargePercent = donutShieldCharge / 100;
+            const size = 0.5 + chargePercent * 0.5;
+            donutShieldChargingMesh.scaling.setAll(size);
+            
+            // Position around player's waist
+            donutShieldChargingMesh.position.x = playerPhysicsBody.position.x;
+            donutShieldChargingMesh.position.y = playerPhysicsBody.position.y + 0.5;
+            donutShieldChargingMesh.position.z = playerPhysicsBody.position.z;
+            
+            // Spin while charging
+            donutShieldChargingMesh.rotation.y += 0.1;
+            
+            // Increase glow as charge increases
+            if (donutShieldChargingMesh.material) {
+                donutShieldChargingMesh.material.emissiveColor = new BABYLON.Color3(
+                    0.4 + chargePercent * 0.3,
+                    0.25 + chargePercent * 0.2,
+                    0.1 + chargePercent * 0.1
+                );
+            }
+            
+            // Update charge
+            donutShieldCharge += DONUT_SHIELD_CHARGE_RATE;
+            if (donutShieldCharge > 100) donutShieldCharge = 100;
+            
+            // Update charge bar UI
+            const donutBar = document.getElementById('donutShieldBar');
+            if (donutBar) donutBar.style.width = donutShieldCharge + '%';
+            
+            const donutContainer = document.getElementById('donutShieldContainer');
+            if (donutContainer) donutContainer.style.display = 'block';
+            
+            // Animate arms outward (holding the donut)
+            if (player && player.leftArm && player.rightArm) {
+                player.leftArm.rotation.x = 0;
+                player.rightArm.rotation.x = 0;
+                player.leftArm.rotation.z = 1.0;
+                player.rightArm.rotation.z = -1.0;
+            }
+            
+            // Auto-activate when fully charged
+            if (donutShieldCharge >= 100) {
+                window.activateDonutShield();
+            }
+        }
+        
+        // Update active donut shield position and spin
+        if (isDonutShieldActive && donutShieldMesh) {
+            // Position around player's waist
+            donutShieldMesh.position.x = playerPhysicsBody.position.x;
+            donutShieldMesh.position.y = playerPhysicsBody.position.y + 0.5;
+            donutShieldMesh.position.z = playerPhysicsBody.position.z;
+            
+            // Spin continuously
+            donutShieldMesh.rotation.y += 0.15;
+            
+            // Check for projectile absorption
+            checkDonutShieldAbsorption();
+        }
+        
+        // Update Sugar Rush particles position
+        if (isSugarRushActive && sugarRushParticles) {
+            // Position emitter at player's head
+            const headPos = playerPhysicsBody.position.clone();
+            headPos.y += 1.5; // Head height
+            sugarRushParticles.emitter = headPos;
+        }
+    };
+    
+    // Check for and absorb nearby projectiles
+    function checkDonutShieldAbsorption() {
+        if (!isDonutShieldActive || !donutShieldMesh) return;
+        
+        const shieldPos = donutShieldMesh.position;
+        
+        // Check against all projectiles in the scene
+        const projectiles = scene.meshes.filter(mesh => 
+            mesh.name && (
+                mesh.name.startsWith("ball") || 
+                mesh.name.startsWith("projectile") ||
+                mesh.name.startsWith("grenade") ||
+                mesh.name.startsWith("ultimate") ||
+                mesh.name.startsWith("droneBomb")
+            ) &&
+            mesh.physicsImpostor && !mesh.isDisposed()
+        );
+        
+        for (const projectile of projectiles) {
+            const dist = BABYLON.Vector3.Distance(projectile.position, shieldPos);
+            if (dist < DONUT_SHIELD_RADIUS) {
+                // Absorb this projectile!
+                console.log('Donut Shield absorbed:', projectile.name);
+                sugarRushPoints++;
+                
+                // Grow the donut shield slightly (10% per absorbed projectile)
+                if (donutShieldMesh) {
+                    const growthFactor = 1 + (sugarRushPoints * 0.1);
+                    donutShieldMesh.scaling.setAll(growthFactor);
+                }
+                
+                // Create absorption visual effect
+                createAbsorptionEffect(projectile.position.clone());
+                
+                // Emit absorption event to server (include new size for other players)
+                socket.emit('projectileAbsorbed', {
+                    projectileType: projectile.name,
+                    x: projectile.position.x,
+                    y: projectile.position.y,
+                    z: projectile.position.z,
+                    absorptionCount: sugarRushPoints
+                });
+                
+                // Dispose the projectile
+                if (projectile.physicsImpostor) {
+                    projectile.physicsImpostor.dispose();
+                }
+                projectile.dispose();
+            }
+        }
+    }
+    
+    // Create visual effect when absorbing a projectile
+    function createAbsorptionEffect(position) {
+        // Quick flash effect at absorption point
+        const flash = BABYLON.MeshBuilder.CreateSphere("absorbFlash", {diameter: 0.5}, scene);
+        flash.position.copyFrom(position);
+        const flashMat = new BABYLON.StandardMaterial("absorbFlashMat", scene);
+        flashMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0.3);
+        flashMat.emissiveColor = new BABYLON.Color3(1, 0.6, 0.2);
+        flashMat.alpha = 0.9;
+        flash.material = flashMat;
+        flash.isPickable = false;
+        
+        // Animate flash expanding and fading
+        let scale = 1;
+        const flashObserver = scene.onBeforeRenderObservable.add(() => {
+            scale += 0.2;
+            flash.scaling.setAll(scale);
+            flashMat.alpha -= 0.1;
+            
+            if (flashMat.alpha <= 0) {
+                scene.onBeforeRenderObservable.remove(flashObserver);
+                flash.dispose();
+            }
+        });
+    }
+    
+    // Expose charge level for network sync
+    window.getDonutShieldChargeLevel = function() {
+        return isChargingDonutShield ? donutShieldCharge : 0;
+    };
+    
+    window.isDonutShieldActive = function() {
+        return isDonutShieldActive;
+    };
+    
+    window.isSugarRushActive = function() {
+        return isSugarRushActive;
+    };
+
     // Launch drone after charging
     window.launchDrone = function() {
         isChargingDrone = false;
@@ -5824,7 +6356,8 @@ function handleMovement() {
     right.y = 0;
     right.normalize();
     
-    const moveSpeed = 6;
+    const baseMoveSpeed = 6;
+    const moveSpeed = isSugarRushActive ? baseMoveSpeed * SUGAR_RUSH_SPEED_MULTIPLIER : baseMoveSpeed;
     let moveDirection = new BABYLON.Vector3(0, 0, 0);
     let hasInput = false;
 
@@ -6707,6 +7240,9 @@ socket.on('playerMoved', (playerInfo) => {
         // Apply animation state immediately
         applyOtherPlayerAnimation(p, playerInfo.animState || 'idle', playerInfo.chargeLevel || 0, playerInfo.grenadeChargeLevel || 0, playerInfo.droneChargeLevel || 0, playerInfo.clothChargeLevel || 0, playerInfo.grappleChargeLevel || 0, playerInfo.waterBalloonChargeLevel || 0, playerInfo.balloonChargeLevel || 0);
         
+        // Store donut shield charge level for the charging observer to use
+        p.donutShieldChargeLevel = playerInfo.donutShieldChargeLevel || 0;
+        
         // Handle other player's drone
         if (playerInfo.isDroneMode) {
             // Create drone mesh if it doesn't exist
@@ -7111,6 +7647,11 @@ socket.on('batSwung', (batData) => {
         // Check for spawn immunity
         if (hasSpawnImmunity) {
             console.log('BAT SWING BLOCKED BY SPAWN IMMUNITY!');
+            return;
+        }
+        // Check for Sugar Rush immunity (immune to katana during Sugar Rush)
+        if (window.isSugarRushActive && window.isSugarRushActive()) {
+            console.log('BAT SWING BLOCKED BY SUGAR RUSH!');
             return;
         }
         const batPos = new BABYLON.Vector3(batData.x, batData.y, batData.z);
@@ -8067,6 +8608,258 @@ socket.on('playerBalloonPopped', (data) => {
     }
 });
 
+// Receive Homer donut shield charging started by another player
+socket.on('playerDonutShieldChargeStart', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        // Create charging mesh if not already present
+        if (!p.donutShieldChargingMesh) {
+            p.donutShieldChargingMesh = BABYLON.MeshBuilder.CreateTorus("otherDonutShieldCharging_" + playerId, {
+                diameter: 1.5,
+                thickness: 0.2,
+                tessellation: 24
+            }, scene);
+            const chargeMat = new BABYLON.StandardMaterial("otherDonutShieldChargeMat_" + playerId, scene);
+            chargeMat.diffuseColor = new BABYLON.Color3(0.85, 0.55, 0.25);
+            chargeMat.emissiveColor = new BABYLON.Color3(0.4, 0.25, 0.1);
+            chargeMat.alpha = 0.7;
+            p.donutShieldChargingMesh.material = chargeMat;
+            p.donutShieldChargingMesh.isPickable = false;
+        }
+        
+        p.isChargingDonutShield = true;
+        // donutShieldChargeLevel will be updated from movement data (playerMoved handler)
+        
+        // Update charging mesh position and size each frame
+        p.donutShieldChargingObserver = scene.onBeforeRenderObservable.add(() => {
+            if (p.donutShieldChargingMesh && p.mesh && !p.donutShieldChargingMesh.isDisposed()) {
+                // Position around player's waist
+                p.donutShieldChargingMesh.position.x = p.mesh.position.x;
+                p.donutShieldChargingMesh.position.y = p.mesh.position.y + 1.0;
+                p.donutShieldChargingMesh.position.z = p.mesh.position.z;
+                
+                // Spin while charging
+                p.donutShieldChargingMesh.rotation.y += 0.1;
+                
+                // Scale based on charge level (from movement data)
+                const chargePercent = (p.donutShieldChargeLevel || 0) / 100;
+                const size = 0.5 + chargePercent * 0.5;
+                p.donutShieldChargingMesh.scaling.setAll(size);
+                
+                // Increase glow with charge
+                if (p.donutShieldChargingMesh.material) {
+                    p.donutShieldChargingMesh.material.emissiveColor = new BABYLON.Color3(
+                        0.4 + chargePercent * 0.3,
+                        0.25 + chargePercent * 0.2,
+                        0.1 + chargePercent * 0.1
+                    );
+                }
+            }
+        });
+    }
+});
+
+// Receive Homer donut shield charging cancelled by another player
+socket.on('playerDonutShieldChargeCancelled', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        // Dispose charging mesh
+        if (p.donutShieldChargingMesh) {
+            p.donutShieldChargingMesh.dispose();
+            p.donutShieldChargingMesh = null;
+        }
+        
+        // Remove charging observer
+        if (p.donutShieldChargingObserver) {
+            scene.onBeforeRenderObservable.remove(p.donutShieldChargingObserver);
+            p.donutShieldChargingObserver = null;
+        }
+        
+        p.isChargingDonutShield = false;
+        p.donutShieldChargeLevel = 0;
+    }
+});
+
+// Receive Homer donut shield activated by another player
+socket.on('playerDonutShieldActivate', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        // Dispose any existing charging mesh and observer
+        if (p.donutShieldChargingMesh) {
+            p.donutShieldChargingMesh.dispose();
+            p.donutShieldChargingMesh = null;
+        }
+        if (p.donutShieldChargingObserver) {
+            scene.onBeforeRenderObservable.remove(p.donutShieldChargingObserver);
+            p.donutShieldChargingObserver = null;
+        }
+        p.isChargingDonutShield = false;
+        
+        // Create donut shield mesh
+        if (p.donutShieldMesh) {
+            p.donutShieldMesh.dispose();
+        }
+        
+        p.donutShieldMesh = BABYLON.MeshBuilder.CreateTorus("otherDonutShield_" + playerId, {
+            diameter: 4,
+            thickness: 0.5,
+            tessellation: 32
+        }, scene);
+        const donutMat = new BABYLON.StandardMaterial("otherDonutShieldMat_" + playerId, scene);
+        donutMat.diffuseColor = new BABYLON.Color3(0.9, 0.6, 0.3);
+        donutMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.1);
+        donutMat.specularColor = new BABYLON.Color3(0.5, 0.4, 0.3);
+        donutMat.specularPower = 16;
+        p.donutShieldMesh.material = donutMat;
+        p.donutShieldMesh.isPickable = false;
+        
+        // Try to load the 3D donut model
+        loadCachedMesh('donut', scene, function(meshes) {
+            if (meshes.length > 0 && p.donutShieldMesh && !p.donutShieldMesh.isDisposed()) {
+                p.donutShieldMesh.visibility = 0;
+                const donutModel = new BABYLON.TransformNode("otherDonutModel_" + playerId, scene);
+                meshes.forEach(mesh => {
+                    mesh.parent = donutModel;
+                    mesh.isPickable = false;
+                });
+                donutModel.parent = p.donutShieldMesh;
+                donutModel.position = new BABYLON.Vector3(0, -1, 0);
+                donutModel.scaling = new BABYLON.Vector3(0.02, 0.02, 0.02);
+                donutModel.rotation = new BABYLON.Vector3(-Math.PI/2, 0, 0);
+                p.donutShieldMesh.donutModel = donutModel;
+            }
+        }, null);
+        
+        p.isDonutShieldActive = true;
+        
+        // Spin the donut each frame
+        p.donutShieldUpdateObserver = scene.onBeforeRenderObservable.add(() => {
+            if (p.donutShieldMesh && p.mesh && !p.donutShieldMesh.isDisposed()) {
+                p.donutShieldMesh.position.x = p.mesh.position.x;
+                p.donutShieldMesh.position.y = p.mesh.position.y + 1.0;
+                p.donutShieldMesh.position.z = p.mesh.position.z;
+                p.donutShieldMesh.rotation.y += 0.15;
+            }
+        });
+    }
+});
+
+// Receive Homer donut shield deactivated (and sugar rush started)
+socket.on('playerDonutShieldDeactivate', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        if (p.donutShieldMesh) {
+            if (p.donutShieldMesh.donutModel) {
+                p.donutShieldMesh.donutModel.dispose();
+            }
+            p.donutShieldMesh.dispose();
+            p.donutShieldMesh = null;
+        }
+        if (p.donutShieldUpdateObserver) {
+            scene.onBeforeRenderObservable.remove(p.donutShieldUpdateObserver);
+            p.donutShieldUpdateObserver = null;
+        }
+        p.isDonutShieldActive = false;
+    }
+});
+
+// Receive Homer sugar rush started by another player
+socket.on('playerSugarRushStart', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        // Create cone particle emitter from their head
+        p.sugarRushParticles = new BABYLON.ParticleSystem("otherSugarRushParticles_" + playerId, 2000, scene);
+        p.sugarRushParticles.particleTexture = new BABYLON.Texture("https://www.babylonjs-playground.com/textures/flare.png", scene);
+        p.sugarRushParticles.color1 = new BABYLON.Color4(0.7, 0.8, 1.0, 1.0);
+        p.sugarRushParticles.color2 = new BABYLON.Color4(0.2, 0.5, 1.0, 1.0);
+        p.sugarRushParticles.colorDead = new BABYLON.Color4(0, 0, 0.2, 0.0);
+        p.sugarRushParticles.minSize = 0.1;
+        p.sugarRushParticles.maxSize = 0.5;
+        p.sugarRushParticles.minLifeTime = 0.3;
+        p.sugarRushParticles.maxLifeTime = 1.5;
+        p.sugarRushParticles.emitRate = 1000;
+        p.sugarRushParticles.createConeEmitter(0.3, Math.PI / 3);
+        p.sugarRushParticles.minEmitPower = 2;
+        p.sugarRushParticles.maxEmitPower = 4;
+        p.sugarRushParticles.updateSpeed = 0.005;
+        p.sugarRushParticles.start();
+        
+        p.isSugarRushActive = true;
+        
+        // Update particle position each frame
+        p.sugarRushUpdateObserver = scene.onBeforeRenderObservable.add(() => {
+            if (p.sugarRushParticles && p.mesh) {
+                const headPos = p.mesh.position.clone();
+                headPos.y += 2.0;
+                p.sugarRushParticles.emitter = headPos;
+            }
+        });
+    }
+});
+
+// Receive Homer sugar rush ended by another player
+socket.on('playerSugarRushEnd', (data) => {
+    const playerId = data.playerId;
+    if (otherPlayers[playerId]) {
+        const p = otherPlayers[playerId];
+        
+        if (p.sugarRushParticles) {
+            p.sugarRushParticles.stop();
+            p.sugarRushParticles.dispose();
+            p.sugarRushParticles = null;
+        }
+        if (p.sugarRushUpdateObserver) {
+            scene.onBeforeRenderObservable.remove(p.sugarRushUpdateObserver);
+            p.sugarRushUpdateObserver = null;
+        }
+        p.isSugarRushActive = false;
+    }
+});
+
+// Receive projectile absorbed by Homer's donut shield
+socket.on('projectileAbsorbed', (data) => {
+    // Create absorption flash effect at the given position
+    const position = new BABYLON.Vector3(data.x, data.y, data.z);
+    const flash = BABYLON.MeshBuilder.CreateSphere("absorbFlashOther", {diameter: 0.5}, scene);
+    flash.position.copyFrom(position);
+    const flashMat = new BABYLON.StandardMaterial("absorbFlashOtherMat", scene);
+    flashMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0.3);
+    flashMat.emissiveColor = new BABYLON.Color3(1, 0.6, 0.2);
+    flashMat.alpha = 0.9;
+    flash.material = flashMat;
+    flash.isPickable = false;
+    
+    // Grow the other player's donut shield
+    const playerId = data.playerId;
+    if (otherPlayers[playerId] && otherPlayers[playerId].donutShieldMesh) {
+        const p = otherPlayers[playerId];
+        const absorptionCount = data.absorptionCount || 1;
+        const growthFactor = 1 + (absorptionCount * 0.1);
+        p.donutShieldMesh.scaling.setAll(growthFactor);
+    }
+    
+    let scale = 1;
+    const flashObserver = scene.onBeforeRenderObservable.add(() => {
+        scale += 0.2;
+        flash.scaling.setAll(scale);
+        flashMat.alpha -= 0.1;
+        if (flashMat.alpha <= 0) {
+            scene.onBeforeRenderObservable.remove(flashObserver);
+            flash.dispose();
+        }
+    });
+});
+
 // Helper function to spawn block
 function spawnBlock(data) {
     var mesh;
@@ -8513,12 +9306,13 @@ document.addEventListener('keydown', function(event) {
         window.startChargingCloth();
     }
     
-    // Patrick Grapple Hook OR Skibidi Toilet Water Balloon OR Beavis Balloon - hold G to charge
+    // Patrick Grapple Hook OR Skibidi Toilet Water Balloon OR Beavis Balloon OR Homer Donut Shield - hold G to charge
     // (skin-specific, only one will activate based on selected skin)
     if (event.code === "KeyG") {
         window.startChargingGrapple();
         window.startChargingWaterBalloon();
         window.startChargingBalloon();
+        window.startChargingDonutShield();
     }
     
     // Beavis Balloon pop - Shift key to manually pop balloon (only works with Beavis skin when balloon is active)
@@ -8560,11 +9354,12 @@ document.addEventListener('keyup', function(event) {
         window.cancelCloth();
     }
     
-    // Cancel grapple OR water balloon OR balloon if G is released before fully charged
+    // Cancel grapple OR water balloon OR balloon OR donut shield if G is released before fully charged
     if (event.code === "KeyG") {
         window.cancelGrapple();
         window.cancelWaterBalloon();
         window.cancelBalloon();
+        window.cancelDonutShield();
     }
 });
 

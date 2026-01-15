@@ -1073,6 +1073,77 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Homer Donut Shield ability - charging started
+    socket.on('donutShieldChargeStart', () => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerDonutShieldChargeStart', { playerId: socket.id });
+        }
+    });
+
+    // Homer Donut Shield ability - charging cancelled
+    socket.on('donutShieldChargeCancelled', () => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerDonutShieldChargeCancelled', { playerId: socket.id });
+        }
+    });
+
+    // Homer Donut Shield ability - activated
+    socket.on('donutShieldActivate', (shieldData) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerDonutShieldActivate', { 
+                playerId: socket.id,
+                x: shieldData.x,
+                y: shieldData.y,
+                z: shieldData.z
+            });
+        }
+    });
+
+    // Homer Donut Shield ability - deactivated
+    socket.on('donutShieldDeactivate', (data) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerDonutShieldDeactivate', { 
+                playerId: socket.id,
+                sugarRushActive: data.sugarRushActive,
+                sugarRushPoints: data.sugarRushPoints
+            });
+        }
+    });
+
+    // Homer Sugar Rush ability - started
+    socket.on('sugarRushStart', () => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerSugarRushStart', { playerId: socket.id });
+        }
+    });
+
+    // Homer Sugar Rush ability - ended
+    socket.on('sugarRushEnd', () => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('playerSugarRushEnd', { playerId: socket.id });
+        }
+    });
+
+    // Homer Donut Shield - projectile absorbed
+    socket.on('projectileAbsorbed', (absorbData) => {
+        if (players[socket.id]) {
+            const roomId = players[socket.id].roomId;
+            socket.to(roomId).emit('projectileAbsorbed', { 
+                playerId: socket.id,
+                projectileType: absorbData.projectileType,
+                x: absorbData.x,
+                y: absorbData.y,
+                z: absorbData.z
+            });
+        }
+    });
+
     socket.on('playerDied', (data) => {
         const killerId = data ? data.killerId : null;
         const cause = data ? data.cause : 'unknown';
